@@ -90,6 +90,7 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
+#include <linux/hypercall.h>
 
 DEFINE_MUTEX(sched_domains_mutex);
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
@@ -2872,7 +2873,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	/*
 	 * For paravirt, this is coupled with an exit in switch_to to
 	 * combine the page table reload and the switch backend into
-	 * one hypercall.
+	 * one igloo_hypercall.
 	 */
 	arch_start_context_switch(prev);
 
@@ -2897,6 +2898,11 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	spin_release(&rq->lock.dep_map, 1, _THIS_IP_);
 
 	/* Here we just switch the register state and the stack. */
+	igloo_hypercall(590, (uint32_t)next->comm);
+	igloo_hypercall(591, next->tgid);
+	igloo_hypercall(592, next->real_parent->tgid);
+	igloo_hypercall(593, next->start_time);
+
 	switch_to(prev, next, prev);
 	barrier();
 
