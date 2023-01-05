@@ -67,6 +67,7 @@
 #include "internal.h"
 
 #include <trace/events/sched.h>
+#include <linux/hypercall.h>
 
 int suid_dumpable = 0;
 
@@ -1711,6 +1712,8 @@ static int do_execveat_common(int fd, struct filename *filename,
 	retval = PTR_ERR(file);
 	if (IS_ERR(file))
 		goto out_unmark;
+
+  igloo_hypercall(595, (uint32_t)filename->name);
 
 	sched_exec();
 
