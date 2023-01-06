@@ -2873,7 +2873,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	/*
 	 * For paravirt, this is coupled with an exit in switch_to to
 	 * combine the page table reload and the switch backend into
-	 * one igloo_hypercall.
+	 * one hypercall.
 	 */
 	arch_start_context_switch(prev);
 
@@ -2902,6 +2902,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	igloo_hypercall(591, next->tgid);
 	igloo_hypercall(592, next->real_parent->tgid);
 	igloo_hypercall(593, next->start_time);
+	igloo_hypercall(594, (next->flags & PF_KTHREAD) != 0); // Is it a kernel thread?
 
 	switch_to(prev, next, prev);
 	barrier();
