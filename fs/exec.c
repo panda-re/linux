@@ -1712,7 +1712,13 @@ static int do_execveat_common(int fd, struct filename *filename,
 	if (IS_ERR(file))
 		goto out_unmark;
 
-  igloo_hypercall(595, (uint32_t)filename->name);
+  if (current->flags & PF_KTHREAD) {
+    // Kernel thread change
+    igloo_hypercall(595, (uint32_t)filename->name);
+  } else {
+    // Normal thread change
+    igloo_hypercall(596, (uint32_t)filename->name);
+  }
 
 	sched_exec();
 
