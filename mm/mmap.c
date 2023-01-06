@@ -380,7 +380,7 @@ static void validate_mm(struct mm_struct *mm)
   // INTROSPECTION VERSION
 	struct vm_area_struct *vma = mm->mmap;
 
-  igloo_hypercall(5910, 0); // Starting VMA report
+  igloo_hypercall(5910, 1); // Starting VMA report
 
 	while (vma) {
     /*
@@ -408,12 +408,12 @@ static void validate_mm(struct mm_struct *mm)
       igloo_hypercall(5914, 3); // name is error
     }
 
-  igloo_hypercall(5910, 1); // Ending this VMA
+  igloo_hypercall(5910, 2); // Ending this VMA
 
 		vma = vma->vm_next;
 	}
 
-  igloo_hypercall(5910, 2); // Ending VMA report
+  igloo_hypercall(5910, 3); // Ending VMA report
 }
 
 #endif
