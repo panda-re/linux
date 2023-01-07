@@ -2857,6 +2857,7 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 		put_user(task_pid_vnr(current), current->set_child_tid);
 }
 
+extern void log_mm(struct mm_struct *mm);
 /*
  * context_switch - switch to the new MM and the new thread's register state.
  */
@@ -2903,6 +2904,9 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	igloo_hypercall(592, next->real_parent->tgid);
 	igloo_hypercall(593, next->start_time);
 	igloo_hypercall(594, (next->flags & PF_KTHREAD) != 0); // Is it a kernel thread?
+
+  // Tell us about the current VMAs
+  log_mm(next->mm);
 
 	switch_to(prev, next, prev);
 	barrier();
