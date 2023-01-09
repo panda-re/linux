@@ -2906,7 +2906,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	igloo_hypercall(594, (next->flags & PF_KTHREAD) != 0); // Is it a kernel thread?
 
   // Tell us about the current VMAs
-  log_mm(next->mm);
+  if (next->mm) log_mm(next->mm);
 
 	switch_to(prev, next, prev);
 	barrier();
