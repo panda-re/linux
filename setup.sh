@@ -9,15 +9,22 @@ ABI=
 TARGETS=vmlinux
 
 
-if [ "$ARCH" = "arm" ]; then
+# Firmadyne cross compilers from https://zenodo.org/record/4922202
+if [ "$ARCH" = "armel" ] || [ "$ARCH" = "armeb" ]; then
   TARGETS="vmlinux zImage" # only for arm
   ABI=eabi # only for arm
-  SHORT_ARCH=$ARCH
-fi
+  SHORT_ARCH=arm
 
-# Firmadyne cross compilers from https://zenodo.org/record/4922202
-# works for kernel 4.10
-CROSS_CC=/cross/${ARCH}-linux-musl${ABI}/bin/${ARCH}-linux-musl${ABI}-
+  if [ "$ARCH" = "armeb" ]; then
+    export CFLAGS="-mbig-endian"
+    export KCFLAGS="-mbig-endian"
+  fi
+
+  # Even for armeb, we use same compiler. Big endian just needs an extra cflag
+  CROSS_CC=/cross/arm-linux-musleabi/bin/arm-linux-musleabi-
+else
+  CROSS_CC=/cross/${ARCH}-linux-musl${ABI}/bin/${ARCH}-linux-musl${ABI}-
+fi
 
 if [ ! -e build/${ARCH}/.config ] || [ "$(diff build/${ARCH}/.config config.${ARCH} | wc -l)" -eq 0 ];  then
   echo "Configuring kernel"
@@ -30,14 +37,3 @@ fi
 
 echo "Building kernel"
 make ARCH=${SHORT_ARCH} CROSS_COMPILE=${CROSS_CC} O=build/${ARCH} $TARGETS -j$(nproc)
-
-#PANDA=~/git/panda
-#echo 'Updating PANDA info'
-#${PANDA}/panda/plugins/osi_linux/utils/kernelinfo_gdb/run.sh ./build/${ARCH}/vmlinux ./panda_profile.${ARCH}
-#
-#if [ -e build/${ARCH}/arch/${SHORT_ARCH}/boot/zImage ]; then
-#  cp build/${ARCH}/arch/${SHORT_ARCH}/boot/zImage  ${OUTDIR}/zImage4.${ARCH}
-#fi
-
-#echo "[${ARCH}]" > ${OUTDIR}/${ARCH}_profile4.conf 
-#cat panda_profile.${ARCH} >> ${OUTDIR}/${ARCH}_profile4.conf 
