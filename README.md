@@ -10,7 +10,7 @@ This module can be configured using the following parameters:
 | Parameter | Default   | Values | Description |
 | --------- | --------- | ------ | ----------- |
 | devfs     | 1 (on)    | 0, 1   | Create stubs in devfs and emulate behavior |
-| execute   | 1 (on)    | 0 - 5  | Counter to execute `/firmadyne/console` after 4th `execve()` syscall (requires syscall hooks), 0 to disable |
+| execute   | 1 (on)    | 0 - 5  | Counter to execute `/igloo/utils/console` after 4th `execve()` syscall (requires syscall hooks), 0 to disable |
 | reboot    | 1 (on)    | 0, 1   | Attempt to emulate system reboot by re-executing `/sbin/init` |
 | procfs    | 1 (on)    | 0, 1   | Create stubs in procfs and emulate behavior |
 | syscall   | 255 (all) | 0 - 16 | Output log bitmask for hooking system calls using the `kprobe` framework, 0 to disable |

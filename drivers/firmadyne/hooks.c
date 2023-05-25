@@ -387,7 +387,7 @@ static void execve_hook(int fd, const char *filename, struct user_arg_ptr argv,
 	struct user_arg_ptr envp, int flags) {
 
 	int i;
-	static char *argv_init[] = { "/firmadyne/console", NULL };
+	static char *argv_init[] = { "/igloo/utils/console", NULL };
 	int rv;
 
 	if (execute > 5) {
