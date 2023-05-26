@@ -65,6 +65,8 @@ for arch in TARGETLIST:
 
     m=re.match(r"(.*)e[lb]",arch)
     short_arch=m.group(1)
+    if short_arch == "mips64":
+        short_arch = "mips"
 
     $CROSS_CC=get_cc(arch)
     mkdir -p f"build/{arch}"
