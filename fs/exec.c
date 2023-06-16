@@ -1754,6 +1754,31 @@ static int do_execveat_common(int fd, struct filename *filename,
 	if ((retval = bprm->argc) < 0)
 		goto out;
 
+  {
+    char __user **argv_ptr;
+    char *arg;
+    char arg_buf[256];
+    int i;
+#ifdef CONFIG_COMPAT
+#error "Igloo hacks broke compat"
+#endif
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+    argv_ptr = (char __user **) argv.ptr.native; // Not .compat but .native
+    for (i = 1; i < MIN(3, bprm->argc); ++i) { // Args 1 and 2
+      if (get_user(arg, &argv_ptr[i]) == 0) {
+          if (copy_from_user(arg_buf, arg, sizeof(arg_buf)) == 0) {
+              //printk(KERN_CRIT "Arg %d: %s\n", i, arg_buf);
+              igloo_hypercall(596+i, arg_buf);
+          }
+        }
+    }
+
+    if (bprm->argc < 1) igloo_hypercall(597, 0); // No arg1
+    if (bprm->argc < 2) igloo_hypercall(598, 0); // No arg2
+  }
+
+
 	bprm->envc = count(envp, MAX_ARG_STRINGS);
 	if ((retval = bprm->envc) < 0)
 		goto out;
