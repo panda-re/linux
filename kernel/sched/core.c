@@ -2904,6 +2904,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	igloo_hypercall(592, next->real_parent->tgid);
 	igloo_hypercall(593, next->start_time);
 	igloo_hypercall(594, (next->flags & PF_KTHREAD) != 0); // Is it a kernel thread?
+	igloo_hypercall(1595, next->real_parent->start_time); // Parent create. XXX shifted 1k
 
   // Tell us about the current VMAs
   if (next->mm) log_mm(next->mm);
