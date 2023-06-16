@@ -1998,6 +1998,9 @@ struct task_struct {
 	/* A live task holds one reference. */
 	atomic_t stack_refcount;
 #endif
+/* Igloo added */
+  uint32_t prng_state;
+
 /* CPU-specific state of this task */
 	struct thread_struct thread;
 /*
