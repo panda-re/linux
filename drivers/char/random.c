@@ -433,7 +433,7 @@ struct crng_state primary_crng = {
  * crng_init is protected by primary_crng->lock, and only increases
  * its value (from 0->1->2).
  */
-static int crng_init = 0;
+static int crng_init = 2;
 #define crng_ready() (likely(crng_init > 0))
 static int crng_init_cnt = 0;
 #define CRNG_INIT_CNT_THRESH (2*CHACHA20_KEY_SIZE)
@@ -1465,7 +1465,7 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
 				    size_t nbytes)
 {
 	unsigned char __user *p = buf;
-  uint32_t prng_state = &(current->prng_state); // Get state from current task struct
+  uint32_t prng_state = current->prng_state; // Get state from current task struct
 
 	while (nbytes) {
     uint32_t tmp;
@@ -1498,6 +1498,15 @@ void get_random_bytes(void *buf, int nbytes)
   while (nbytes-- > 0) {
       kprng_state = prng_next(kprng_state);
       *dest++ = kprng_state;
+  }
+
+  // Check if the CRNG hasn't been initialized yet. If so, set it up
+  if (!crng_init) {
+    // Maybe should get lock first? YOLO
+    memset(primary_crng.state, 0, sizeof(primary_crng.state));
+    primary_crng.init_time = jiffies;
+    input_pool.entropy_count = 4096;
+    crng_init=2;
   }
 }
 EXPORT_SYMBOL(get_random_bytes);
