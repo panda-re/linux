@@ -779,11 +779,11 @@ static void crng_initialize(struct crng_state *crng)
 	unsigned long	rv;
 
 	memcpy(&crng->state[0], "expand 32-byte k", 16);
-	if (crng == &primary_crng)
-		_extract_entropy(&input_pool, &crng->state[4],
-				 sizeof(__u32) * 12, 0);
-	else
-		get_random_bytes(&crng->state[4], sizeof(__u32) * 12);
+	//if (crng == &primary_crng)
+	//	_extract_entropy(&input_pool, &crng->state[4],
+	//			 sizeof(__u32) * 12, 0);
+	//else
+	//	get_random_bytes(&crng->state[4], sizeof(__u32) * 12);
 	for (i = 4; i < 16; i++) {
 		if (!arch_get_random_seed_long(&rv) &&
 		    !arch_get_random_long(&rv))
@@ -934,39 +934,41 @@ static void crng_backtrack_protect(__u8 tmp[CHACHA20_BLOCK_SIZE], int used)
 	_crng_backtrack_protect(crng, tmp, used);
 }
 
+/* Define the constants for the PRNG. This example uses values
+   from Numerical Recipes and are widely used. */
+#define PRNG_MODULUS ((uint64_t)1 << 31)
+#define PRNG_MULTIPLIER 1103515245
+#define PRNG_INCREMENT 12345
+
+/* This function implements a Linear congruential generator (LCG) */
+static uint32_t prng_next(uint32_t cur_val)
+{
+    return (cur_val * PRNG_MULTIPLIER + PRNG_INCREMENT) % PRNG_MODULUS;
+}
+
+
 static ssize_t extract_crng_user(void __user *buf, size_t nbytes)
 {
-	ssize_t ret = 0, i = CHACHA20_BLOCK_SIZE;
-	__u8 tmp[CHACHA20_BLOCK_SIZE];
-	int large_request = (nbytes > 256);
+  ssize_t ret = nbytes;
+  uint8_t byte_to_copy;
 
-	while (nbytes) {
-		if (large_request && need_resched()) {
-			if (signal_pending(current)) {
-				if (ret == 0)
-					ret = -ERESTARTSYS;
-				break;
-			}
-			schedule();
-		}
+  printk(KERN_NOTICE "random: igloo extract crng with process %s state %x: %lu bytes\n", current->comm, current->prng_state, nbytes);
 
-		extract_crng(tmp);
-		i = min_t(int, nbytes, CHACHA20_BLOCK_SIZE);
-		if (copy_to_user(buf, tmp, i)) {
-			ret = -EFAULT;
-			break;
-		}
+  while (nbytes) {
+      /* Generate the next "random" value */
+      current->prng_state = prng_next(current->prng_state);
 
-		nbytes -= i;
-		buf += i;
-		ret += i;
-	}
-	crng_backtrack_protect(tmp, i);
+      /* Write only the lowest byte */
+      byte_to_copy = current->prng_state & 0xff;
+      if (copy_to_user(buf, &byte_to_copy, 1)) {
+        ret = -EFAULT;
+        break;
+      }
+      buf++;
+      nbytes--;
+  }
 
-	/* Wipe data just written to memory */
-	memzero_explicit(tmp, sizeof(tmp));
-
-	return ret;
+  return ret;
 }
 
 
@@ -995,14 +997,6 @@ struct timer_rand_state {
  */
 void add_device_randomness(const void *buf, unsigned int size)
 {
-	unsigned long time = random_get_entropy() ^ jiffies;
-	unsigned long flags;
-
-	trace_add_device_randomness(size, _RET_IP_);
-	spin_lock_irqsave(&input_pool.lock, flags);
-	_mix_pool_bytes(&input_pool, buf, size);
-	_mix_pool_bytes(&input_pool, &time, sizeof(time));
-	spin_unlock_irqrestore(&input_pool.lock, flags);
 }
 EXPORT_SYMBOL(add_device_randomness);
 
@@ -1076,16 +1070,6 @@ static void add_timer_randomness(struct timer_rand_state *state, unsigned num)
 void add_input_randomness(unsigned int type, unsigned int code,
 				 unsigned int value)
 {
-	static unsigned char last_value;
-
-	/* ignore autorepeat and the like */
-	if (value == last_value)
-		return;
-
-	last_value = value;
-	add_timer_randomness(&input_timer_state,
-			     (type << 4) ^ code ^ (code >> 4) ^ value);
-	trace_add_input_randomness(ENTROPY_BITS(&input_pool));
 }
 EXPORT_SYMBOL_GPL(add_input_randomness);
 
@@ -1125,78 +1109,12 @@ static __u32 get_reg(struct fast_pool *f, struct pt_regs *regs)
 
 void add_interrupt_randomness(int irq, int irq_flags)
 {
-	struct entropy_store	*r;
-	struct fast_pool	*fast_pool = this_cpu_ptr(&irq_randomness);
-	struct pt_regs		*regs = get_irq_regs();
-	unsigned long		now = jiffies;
-	cycles_t		cycles = random_get_entropy();
-	__u32			c_high, j_high;
-	__u64			ip;
-	unsigned long		seed;
-	int			credit = 0;
-
-	if (cycles == 0)
-		cycles = get_reg(fast_pool, regs);
-	c_high = (sizeof(cycles) > 4) ? cycles >> 32 : 0;
-	j_high = (sizeof(now) > 4) ? now >> 32 : 0;
-	fast_pool->pool[0] ^= cycles ^ j_high ^ irq;
-	fast_pool->pool[1] ^= now ^ c_high;
-	ip = regs ? instruction_pointer(regs) : _RET_IP_;
-	fast_pool->pool[2] ^= ip;
-	fast_pool->pool[3] ^= (sizeof(ip) > 4) ? ip >> 32 :
-		get_reg(fast_pool, regs);
-
-	fast_mix(fast_pool);
-	add_interrupt_bench(cycles);
-
-	if (!crng_ready()) {
-		if ((fast_pool->count >= 64) &&
-		    crng_fast_load((char *) fast_pool->pool,
-				   sizeof(fast_pool->pool))) {
-			fast_pool->count = 0;
-			fast_pool->last = now;
-		}
-		return;
-	}
-
-	if ((fast_pool->count < 64) &&
-	    !time_after(now, fast_pool->last + HZ))
-		return;
-
-	r = &input_pool;
-	if (!spin_trylock(&r->lock))
-		return;
-
-	fast_pool->last = now;
-	__mix_pool_bytes(r, &fast_pool->pool, sizeof(fast_pool->pool));
-
-	/*
-	 * If we have architectural seed generator, produce a seed and
-	 * add it to the pool.  For the sake of paranoia don't let the
-	 * architectural seed generator dominate the input from the
-	 * interrupt noise.
-	 */
-	if (arch_get_random_seed_long(&seed)) {
-		__mix_pool_bytes(r, &seed, sizeof(seed));
-		credit = 1;
-	}
-	spin_unlock(&r->lock);
-
-	fast_pool->count = 0;
-
-	/* award one bit for the contents of the fast pool */
-	credit_entropy_bits(r, credit + 1);
 }
 EXPORT_SYMBOL_GPL(add_interrupt_randomness);
 
 #ifdef CONFIG_BLOCK
 void add_disk_randomness(struct gendisk *disk)
 {
-	if (!disk || !disk->random)
-		return;
-	/* first major is 1, so we get >= 0x200 here */
-	add_timer_randomness(disk->random, 0x100 + disk_devt(disk));
-	trace_add_disk_randomness(disk_devt(disk), ENTROPY_BITS(&input_pool));
 }
 EXPORT_SYMBOL_GPL(add_disk_randomness);
 #endif
@@ -1423,49 +1341,9 @@ static ssize_t _extract_entropy(struct entropy_store *r, void *buf,
 static ssize_t extract_entropy(struct entropy_store *r, void *buf,
 				 size_t nbytes, int min, int reserved)
 {
-	__u8 tmp[EXTRACT_SIZE];
-	unsigned long flags;
-
-	/* if last_data isn't primed, we need EXTRACT_SIZE extra bytes */
-	if (fips_enabled) {
-		spin_lock_irqsave(&r->lock, flags);
-		if (!r->last_data_init) {
-			r->last_data_init = 1;
-			spin_unlock_irqrestore(&r->lock, flags);
-			trace_extract_entropy(r->name, EXTRACT_SIZE,
-					      ENTROPY_BITS(r), _RET_IP_);
-			xfer_secondary_pool(r, EXTRACT_SIZE);
-			extract_buf(r, tmp);
-			spin_lock_irqsave(&r->lock, flags);
-			memcpy(r->last_data, tmp, EXTRACT_SIZE);
-		}
-		spin_unlock_irqrestore(&r->lock, flags);
-	}
-
-	trace_extract_entropy(r->name, nbytes, ENTROPY_BITS(r), _RET_IP_);
-	xfer_secondary_pool(r, nbytes);
-	nbytes = account(r, nbytes, min, reserved);
-
-	return _extract_entropy(r, buf, nbytes, fips_enabled);
-}
-
-/* Define the constants for the PRNG. This example uses values
-   from Numerical Recipes and are widely used. */
-#define PRNG_MODULUS ((uint64_t)1 << 31)
-#define PRNG_MULTIPLIER 1103515245
-#define PRNG_INCREMENT 12345
-
-/* This function implements a Linear congruential generator (LCG) */
-static uint32_t prng_next(uint32_t cur_val)
-{
-    return (cur_val * PRNG_MULTIPLIER + PRNG_INCREMENT) % PRNG_MODULUS;
-}
-
-static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
-				    size_t nbytes)
-{
-	unsigned char __user *p = buf;
   uint32_t prng_state = current->prng_state; // Get state from current task struct
+  ssize_t ret = nbytes;
+	unsigned char __user *p = buf;
 
 	while (nbytes) {
     uint32_t tmp;
@@ -1473,6 +1351,30 @@ static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
 		/* Generate the next "random" value */
 		prng_state = prng_next(prng_state);
 		tmp = prng_state;
+    current->prng_state = tmp;
+
+		if (put_user(tmp & 0xFF, p++))  /* Write only the lowest byte */
+			return -EFAULT;
+
+		nbytes--;
+	}
+  return ret;
+}
+
+static ssize_t extract_entropy_user(struct entropy_store *r, void __user *buf,
+				    size_t nbytes)
+{
+	unsigned char __user *p = buf;
+  uint32_t prng_state = current->prng_state; // Get state from current task struct
+  printk(KERN_NOTICE "random: igloo extract with process %s state %x: %lu bytes\n", current->comm, prng_state, nbytes);
+
+	while (nbytes) {
+    uint32_t tmp;
+
+		/* Generate the next "random" value */
+		prng_state = prng_next(prng_state);
+		tmp = prng_state;
+    current->prng_state = tmp;
 
 		if (put_user(tmp & 0xFF, p++))  /* Write only the lowest byte */
 			return -EFAULT;
@@ -1499,17 +1401,29 @@ void get_random_bytes(void *buf, int nbytes)
       kprng_state = prng_next(kprng_state);
       *dest++ = kprng_state;
   }
-
-  // Check if the CRNG hasn't been initialized yet. If so, set it up
-  if (!crng_init) {
-    // Maybe should get lock first? YOLO
-    memset(primary_crng.state, 0, sizeof(primary_crng.state));
-    primary_crng.init_time = jiffies;
-    input_pool.entropy_count = 4096;
-    crng_init=2;
-  }
 }
 EXPORT_SYMBOL(get_random_bytes);
+
+/*
+ * IGLOO logic to initialize CRNG to known default
+ * values to ensure system stability for analysis.
+ * Should never be used in any sort of production env!
+ */
+void igloo_crng_init(void)
+{
+    unsigned long initial_crng_state[] = {
+        0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0,
+        0xdeadbeef, 0xfeedface, 0x0badf00d, 0xdefec8ed,
+        0x4badb002, 0x1ceab00c, 0xbadfaced, 0xc001d00d,
+        0xdeadd00d, 0xf00dbabe, 0xfee1dead, 0xdeadbea7
+    };
+    memcpy(primary_crng.state, initial_crng_state, sizeof(initial_crng_state));
+    primary_crng.init_time = jiffies;
+    input_pool.entropy_count = 4096;
+    crng_init = 2;
+    pr_notice("random: igloo crng init done - not safe for prod\n");
+}
+EXPORT_SYMBOL(igloo_crng_init);
 
 /*
  * Add a callback function that will be invoked when the nonblocking
@@ -1701,16 +1615,6 @@ _random_read(int nonblock, char __user *buf, size_t nbytes)
 				  ENTROPY_BITS(&input_pool));
 		if (n > 0)
 			return n;
-
-		/* Pool is (near) empty.  Maybe wait and retry. */
-		if (nonblock)
-			return -EAGAIN;
-
-		wait_event_interruptible(random_read_wait,
-			ENTROPY_BITS(&input_pool) >=
-			random_read_wakeup_bits);
-		if (signal_pending(current))
-			return -ERESTARTSYS;
 	}
 }
 
@@ -1723,19 +1627,7 @@ random_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 static ssize_t
 urandom_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
-	unsigned long flags;
-	static int maxwarn = 10;
 	int ret;
-
-	if (!crng_ready() && maxwarn > 0) {
-		maxwarn--;
-		printk(KERN_NOTICE "random: %s: uninitialized urandom read "
-		       "(%zd bytes read)\n",
-		       current->comm, nbytes);
-		spin_lock_irqsave(&primary_crng.lock, flags);
-		crng_init_cnt = 0;
-		spin_unlock_irqrestore(&primary_crng.lock, flags);
-	}
 	nbytes = min_t(size_t, nbytes, INT_MAX >> (ENTROPY_SHIFT + 3));
 	ret = extract_crng_user(buf, nbytes);
 	trace_urandom_read(8 * nbytes, 0, ENTROPY_BITS(&input_pool));
@@ -1874,13 +1766,6 @@ SYSCALL_DEFINE3(getrandom, char __user *, buf, size_t, count,
 	if (flags & GRND_RANDOM)
 		return _random_read(flags & GRND_NONBLOCK, buf, count);
 
-	if (!crng_ready()) {
-		if (flags & GRND_NONBLOCK)
-			return -EAGAIN;
-		crng_wait_ready();
-		if (signal_pending(current))
-			return -ERESTARTSYS;
-	}
 	return urandom_read(NULL, buf, count, NULL);
 }
 
