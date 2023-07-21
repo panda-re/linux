@@ -36,7 +36,7 @@ else
   CROSS_CC=/cross/${ARCH}-linux-musl${ABI}/bin/${ARCH}-linux-musl${ABI}-
 fi
 
-if [ ! -e build/${ARCH}/.config ] || [ "$(diff build/${ARCH}/.config config.${ARCH} | wc -l)" -eq 0 ];  then
+if [ ! -e build/${ARCH}/.config ] || [ "$(diff build/${ARCH}/.config config.${ARCH} | wc -l)" -ne 0 ];  then
   echo "Configuring kernel"
   mkdir -p build/${ARCH}
   cp config.${ARCH} build/${ARCH}/.config
