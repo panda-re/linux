@@ -35,7 +35,7 @@ static int __init early_igloo_task_size(char *p) {
         return -1;
     }
     igloo_task_size = task_size;
-    pr_warn("Using igloo_task_size: 0x%lx\n", igloo_task_size);
+    pr_warn_once("Using igloo_task_size: 0x%lx\n", igloo_task_size);
     return 0;
 }
 early_param("igloo_task_size", early_igloo_task_size);
