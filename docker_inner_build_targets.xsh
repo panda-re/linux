@@ -75,6 +75,10 @@ for arch in TARGETLIST:
 
     echo "Building kernel"
     make ARCH=@(short_arch) CROSS_COMPILE=$CROSS_CC O=build/@(arch) @(TARGETS) -j$NPROC
+    cd mod
+    make ARCH=@(short_arch) CROSS_COMPILE=$CROSS_CC BUILD_PATH=/linux/build/@(arch) O=build/@(arch) 
+    cd ..
+
 
     echo 'Updating PANDA info'
     @($PANDA)/panda/plugins/osi_linux/utils/kernelinfo_gdb/run.sh ./build/@(arch)/vmlinux ./panda_profile.@(arch)
