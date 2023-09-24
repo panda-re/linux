@@ -630,6 +630,14 @@ include arch/$(SRCARCH)/Makefile
 KBUILD_CFLAGS	+= $(call cc-option,-fno-delete-null-pointer-checks,)
 KBUILD_CFLAGS	+= $(call cc-disable-warning,frame-address,)
 
+ifdef CONFIG_CPU_MIPS64_R2
+ifdef CONFIG_CPU_LITTLE_ENDIAN
+KBUILD_CFLAGS	+= $(call cc-disable-warning,attribute-alias,)
+KBUILD_CFLAGS	+= $(call cc-disable-warning,maybe-uninitialized,)
+KBUILD_CFLAGS	+= $(call cc-disable-warning,address-of-packed-member,)
+endif
+endif
+
 ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
 KBUILD_CFLAGS	+= $(call cc-option,-ffunction-sections,)
 KBUILD_CFLAGS	+= $(call cc-option,-fdata-sections,)
