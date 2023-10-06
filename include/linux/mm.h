@@ -27,19 +27,19 @@
 //Begin for igloo: we can relocate user stack and mmap_base to compensate for 
 //                 the original kernel's kernel base being different
 #include <linux/moduleparam.h>
-// static unsigned long igloo_task_size = 0;
-// static int __init early_igloo_task_size(char *p) {
-//     unsigned long task_size;
-//     if(kstrtoul(p, 0, &task_size) < 0 ) {
-//         pr_warn("Could not parse igloo_task_size parameter %s\n", p);
-//         return -1;
-//     }
-//     igloo_task_size = task_size;
-//     pr_warn_once("Using igloo_task_size: 0x%lx\n", igloo_task_size);
-//     return 0;
-// }
-// early_param("igloo_task_size", early_igloo_task_size);
-//End for igloo
+static unsigned long igloo_task_size = 0;
+static int __init early_igloo_task_size(char *p) {
+    unsigned long task_size;
+    if(kstrtoul(p, 0, &task_size) < 0 ) {
+        pr_warn("Could not parse igloo_task_size parameter %s\n", p);
+        return -1;
+    }
+    igloo_task_size = task_size;
+    pr_warn_once("Using igloo_task_size: 0x%lx\n", igloo_task_size);
+    return 0;
+}
+early_param("igloo_task_size", early_igloo_task_size);
+// End for igloo
 
 struct mempolicy;
 struct anon_vma;
