@@ -9,6 +9,7 @@
 #include <linux/compiler.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
+#include <linux/igloo.h>
 #include <linux/mman.h>
 #include <linux/export.h>
 #include <linux/personality.h>
