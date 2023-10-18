@@ -87,7 +87,7 @@ for arch in TARGETLIST:
     cat ./panda_profile.@(arch) >> @($OUT)/firmadyne_profiles.conf
 
     echo 'Building volatility profile'
-    /dwarf2json/dwarf2json linux --elf build/@(arch)/vmlinux | xz - > @($OUT)/vmlinux.@(arch).json.xz
+    dwarf2json linux --elf build/@(arch)/vmlinux | xz - > @($OUT)/vmlinux.@(arch).json.xz
 
 git config --global --add safe.directory /linux
 echo f"Built by {$DOCKER_USER} on {$(date).strip()} at version {$(git describe HEAD).strip()}" > @($OUT)/README.txt
