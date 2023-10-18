@@ -13,7 +13,6 @@ else:
 
 if "DOCKER_USER" not in os.environ:
     $DOCKER_USER=$USER
-$CONSOLE="/console"
 $PANDA="/panda"
 $BUILD_ROOT="/linux" #/linux is the volume mount point for this directory
 $OUT="/linux/binaries"
@@ -40,17 +39,6 @@ def get_cc(arch):
 
 rm -rf $OUT
 mkdir -p $OUT
-
-#BEGIN build the console binaries
-cd $CONSOLE
-
-for arch in TARGETLIST:
-    echo f"Building console for {arch}"
-    make clean
-    $CC=f"{get_cc(arch)}gcc"
-    make
-    mv console f"{$OUT}/console.{arch}"
-#DONE building console binaries
 
 $NPROC=$(nproc).strip()
 
