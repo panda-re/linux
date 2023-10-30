@@ -16,7 +16,7 @@ jobs:
       - name: Build 
         run: |
           bash docker_build.sh
-          tar -czvf kernels-latest.tar.gz binaries
+          time tar -czvf kernels-latest.tar.gz binaries
 
       - name: Save package
         uses: actions/upload-artifact@v3
