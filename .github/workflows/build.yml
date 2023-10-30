@@ -4,26 +4,31 @@ on:
   push:
     branches:
       - fd4.10
+env:
+  - BUILD_ARCHES: ["armel", "mipseb", "mipsel", "mips64eb", "mips64el"]
 
 jobs:
-  build:
+  build_arch:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        arch: ${{ env.BUILD_ARCHES }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build 
         run: |
-          bash docker_build.sh
-          tar -czvf kernels-latest.tar.gz binaries
+          bash docker_build.sh ${{ matrix.arch }}
+          tar -czvf kernels-latest-${{ matrix.arch }}.tar.gz binaries
 
       - name: Save package
         uses: actions/upload-artifact@v3
         with:
-          name: kernels-latest.tar.gz
-          path: kernels-latest.tar.gz
+          name: kernels-latest-${{ matrix.arch }}.tar.gz
+          path: kernels-latest-${{ matrix.arch }}.tar.gz
 
+  publish_all:
       - name: Create release
         id: create_release
         uses: actions/create-release@v1
@@ -36,6 +41,15 @@ jobs:
             Release @${{ github.ref }}
           draft: true
           prerelease: false
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Combine all artifacts
+        run: |
+          mkdir -p binaries
+          for f in ${{ env.BUILD_ARCHES }}; do tar -xvf "kernels-latest-$f.tar.gz" -C binaries; done
+          tar -czvf kernels-latest.tar.gz binaries
+
       - name: Upload release asset
         uses: actions/upload-release-asset@v1
         env:
