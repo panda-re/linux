@@ -40,7 +40,8 @@ def get_cc(arch):
 rm -rf $OUT
 mkdir -p $OUT
 
-$NPROC=$(nproc).strip()
+#$NPROC=$(nproc).strip()
+$NPROC=40
 
 #Now build kernels
 cd $BUILD_ROOT
