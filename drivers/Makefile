@@ -6,6 +6,7 @@
 #
 
 obj-$(CONFIG_FIRMADYNE)		+= firmadyne/
+obj-$(CONFIG_DYNDEV)		  += dyndev/
 
 obj-y				+= irqchip/
 obj-y				+= bus/

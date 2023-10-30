@@ -204,4 +204,6 @@ source "drivers/fpga/Kconfig"
 
 source "drivers/firmadyne/Kconfig"
 
+source "drivers/dyndev/Kconfig"
+
 endmenu
