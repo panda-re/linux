@@ -8,8 +8,6 @@ on:
 jobs:
   build:
     runs-on: panda-arc
-    container:
-      image: ubuntu:latest
 
     steps:
       - name: Checkout code
