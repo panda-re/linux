@@ -14,9 +14,9 @@ MODULE_DESCRIPTION("Dynamic devices");
 #define MAX_DEVICES 64  // Maximum number of devices
 static struct class*  my_class  = NULL; // The device-driver class struct pointer
 
-static char *device_names_str = "";
-module_param(device_names_str, charp, 0000);
-MODULE_PARM_DESC(device_names_str, "A comma-separated list of device names");
+static char *devnames = "";
+module_param(devnames, charp, 0000);
+MODULE_PARM_DESC(devnames, "A comma-separated list of device names");
 
 static char **device_name;
 static int *device_major;
@@ -183,14 +183,14 @@ static int __init hyperdev_init(void) {
     dev_t current_dev;
     int i=0;
 
-    if (device_names_str == NULL) {
+    if (devnames == NULL) {
       return -EINVAL;
     }
 
     pr_emerg("dyndev: Initializing the dyndev module\n");
 
     // First, count the number of devices to allocate memory
-    for (str = device_names_str; *str; str++) {
+    for (str = devnames; *str; str++) {
         if (*str == ',') {
             num_devices++;
         }
@@ -217,9 +217,9 @@ static int __init hyperdev_init(void) {
     }
 
     // Now actually tokenize the string
-    str = kstrdup(device_names_str, GFP_KERNEL);
+    str = kstrdup(devnames, GFP_KERNEL);
     if (!str) {
-        pr_err("Failed to duplicate device_names_str\n");
+        pr_err("Failed to duplicate devnames\n");
         kfree(device_name);
         kfree(device_major);
         return -ENOMEM;
