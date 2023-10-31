@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - ARC-Migration
+      - arc-speed
 
 env:
   - BUILD_ARCHES: ["armel", "mipseb", "mipsel", "mips64eb", "mips64el"]
