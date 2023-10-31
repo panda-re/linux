@@ -7,7 +7,7 @@ if [ ! -z $1 ]
 then
        TARGETLIST=$1
 else
-       TARGETLIST=ALL_TARGETS
+       TARGETLIST=$ALL_TARGETS
 fi
 docker build -t igloo_kernel_builder . || exit
 docker run --rm -v `realpath .`:/linux  -w /linux -e IGLOO_TARGETLIST="$TARGETLIST" -e DOCKER_USER="$USER" \
