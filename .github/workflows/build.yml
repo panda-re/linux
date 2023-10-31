@@ -5,24 +5,29 @@ on:
     branches:
       - ARC-Migration
 
+env:
+  - BUILD_ARCHES: ["armel", "mipseb", "mipsel", "mips64eb", "mips64el"]
+
 jobs:
   build:
     runs-on: panda-arc
-
+    strategy:
+      matrix:
+        arch: ${{ env.BUILD_ARCHES }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build 
         run: |
-          bash docker_build.sh
-          time tar -czvf kernels-latest.tar.gz binaries
+          bash docker_build.sh ${{ matrix.arch }}
+          tar -c -I 'xz -6 -T0' -f kernels-latest-${{ matrix.arch }}.tar.xz binaries
 
       - name: Save package
         uses: actions/upload-artifact@v3
         with:
-          name: kernels-latest.tar.gz
-          path: kernels-latest.tar.gz
+          name: kernels-latest-${{ matrix.arch }}.tar.gx
+          path: kernels-latest-${{ matrix.arch }}.tar.gx
 
       - name: Create release
         id: create_release
@@ -36,6 +41,14 @@ jobs:
             Release @${{ github.ref }}
           draft: true
           prerelease: false
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Combine all artifacts
+        run: |
+          mkdir -p binaries
+          for f in ${{ env.BUILD_ARCHES }}; do mv "kernels-latest-$f.tar.gz" binaries; done
+          tar -cvf kernels-latest.tar binaries
       - name: Upload release asset
         uses: actions/upload-release-asset@v1
         env:
