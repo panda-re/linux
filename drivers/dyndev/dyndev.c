@@ -7,7 +7,6 @@
 #include <linux/device.h>
 #include <linux/hypercall.h>
 
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Andrew");
 MODULE_DESCRIPTION("Dynamic devices");
@@ -23,14 +22,72 @@ static char **device_name;
 static int *device_major;
 static int num_devices = 0;
 
-// Create an enum for the hypercall types
-static int hypercall_base = 0x7000;
-enum hypercall_type {
-    HYPERCALL_READ = 10,
-    HYPERCALL_WRITE = 20,
-    HYPERCALL_IOCTL = 30,
-
+#define HYPER_FILE_OP 0x100200
+enum request_type {
+    HYPER_READ,
+    HYPER_WRITE,
+    HYPER_IOCTL,
+    // Add other operation types as needed
 };
+
+struct hyper_read_args {
+    char *buffer;
+    size_t length;
+    loff_t offset;
+};
+
+struct hyper_write_args {
+    const char *buffer;
+    size_t length;
+    loff_t offset;
+};
+
+struct hyper_ioctl_args {
+    unsigned int cmd;
+    unsigned long arg;
+};
+
+struct hyper_file_op {
+    enum request_type type;
+    unsigned long rv;
+    char device_name[128];
+    union {
+        struct hyper_read_args read_args;
+        struct hyper_write_args write_args;
+        struct hyper_ioctl_args ioctl_args;
+    } args;
+};
+
+void sync_struct(struct hyper_file_op* struct_instance) {
+    int i;
+    volatile char junk = 0;
+    int max_tries = 100;
+    while (max_tries-- > 0) {
+        if (igloo_hypercall2(HYPER_FILE_OP, (unsigned long)struct_instance, (unsigned long)sizeof(struct hyper_file_op)) == 0)
+            break;
+        for (i = 0; i < sizeof(struct hyper_file_op); i++) {
+            // Ensure we read the entire structure just to make sure it's paged in
+            junk += ((char*)struct_instance)[i];
+        }
+
+        // Check if it's of type HYPER_READ and if so, copy the data back
+        if (struct_instance->type == HYPER_READ) {
+            // page in the buffer - read up to length bytes
+            for (i = 0; i < struct_instance->args.read_args.length; i++) {
+                junk += (struct_instance->args.read_args.buffer + struct_instance->args.read_args.offset)[i];
+            }
+        } else if (struct_instance->type == HYPER_WRITE) {
+            // page in the buffer - read up to length bytes
+            for (i = 0; i < struct_instance->args.write_args.length; i++) {
+                junk += (struct_instance->args.write_args.buffer + struct_instance->args.write_args.offset)[i];
+            }
+        }
+    }
+    (void)junk;  // Suppress possible unused variable warning
+    if (max_tries == 0) {
+        pr_emerg("dyndev: failed to sync struct\n");
+    }
+}
 
 static int dev_open(struct inode *inodep, struct file *filep) {
     return 0;
@@ -41,49 +98,77 @@ static int dev_release(struct inode *inodep, struct file *filep) {
 }
 
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset) {
-    // First allocate kernel memory of the specified size
-    int bytes_read;
-    char *data = kmalloc(len, GFP_KERNEL);
-    if (!data) {
+    char* kernel_buffer;
+    struct hyper_file_op hyper_op;
+    hyper_op.type = HYPER_READ;
+    strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
+
+    // Our plugin needs to write a buffer - let's use a kernel buffer and copy at the end
+    // Allocate a buffer of size len
+    kernel_buffer = kmalloc(len, GFP_KERNEL);
+    if (!kernel_buffer) {
+        pr_err("Failed to allocate memory for kernel_buffer\n");
         return -ENOMEM;
     }
-    // Write the path of our device into the data buffer
-    // get device_name from filep->f_dentry->d_name.name
-    strncpy(data, filep->f_path.dentry->d_iname, len);
 
+    hyper_op.args.read_args.buffer = kernel_buffer;
+    hyper_op.args.read_args.length = len;
+    hyper_op.args.read_args.offset = *offset;
+    //printk(KERN_INFO "dyndev: Reading from device %s with len %d and offset %lld\n", hyper_op.device_name, len, *offset);
 
-    // Now ask the emulator to model the read and write into data
-    bytes_read = 0; // XXX need to get from HC
-    igloo_hypercall(HYPERCALL_READ+0, data); // Start of read. Buffer at input = device name, at output = data to read
+    sync_struct(&hyper_op);
 
-    if (bytes_read > 0) {
-        if (copy_to_user(buffer, data, bytes_read)) {
-            kfree(data);
-            return -EFAULT;
-        }
+    //printk(KERN_INFO "dyndev: hyper_op.rv = %ld\n", hyper_op.rv);
+
+    // Now copy from the kernel buffer to the user buffer - use copy_to_user
+    if (copy_to_user(buffer, kernel_buffer, len)) {
+        pr_err("Failed to copy kernel_buffer to user buffer\n");
+        return -EFAULT;
     }
-    kfree(data);
-    return bytes_read;
+
+    // Now update the offset
+    if (hyper_op.rv > 0) {
+        *offset += hyper_op.rv;
+    }
+    //printk(KERN_INFO "dyndev: after read set offset to %ld\n", *offset);
+
+    // Free our buffer
+    kfree(kernel_buffer);
+
+    return hyper_op.rv; // Return the value fetched from the emulator
 }
 
-
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
-    // First allocate enough memory for the device name, d_name.name. Not len, but the length of the device name.
+    struct hyper_file_op hyper_op;
+    hyper_op.type = HYPER_WRITE;
+    strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
+    hyper_op.args.write_args.buffer = buffer;
+    hyper_op.args.write_args.length = len;
+    hyper_op.args.write_args.offset = *offset;
 
-    igloo_hypercall(HYPERCALL_WRITE+0, &filep->f_path.dentry->d_iname); // Start of write. Device name is in buffer.
-    igloo_hypercall(HYPERCALL_WRITE+1, len); // Tell mu len
-    igloo_hypercall(HYPERCALL_WRITE+2, offset); // Tell emu offset
-    igloo_hypercall(HYPERCALL_WRITE+3, buffer); // Now tell the emulator to do the write
-    return 0; // XXX need to get retval from HC
+    //printk(KERN_INFO "dyndev: Writing device %s with len %d and offset %lld\n", hyper_op.device_name, len, *offset);
+    sync_struct(&hyper_op);
+    //printk(KERN_INFO "dyndev: hyper_op.rv = %ld\n", hyper_op.rv);
+
+    // Now update the offset
+    if (hyper_op.rv > 0) {
+        *offset += hyper_op.rv;
+    }
+    //printk(KERN_INFO "dyndev: after write set offset to %lld\n", *offset);
+    return hyper_op.rv; // Return the value fetched from the emulator
 }
 
 static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
-    igloo_hypercall(HYPERCALL_IOCTL+0, &filep->f_path.dentry->d_iname); // Start of ioctl. Device name is in buffer.
-    igloo_hypercall(HYPERCALL_IOCTL+1, cmd); // ioctl cmd
-    igloo_hypercall(HYPERCALL_IOCTL+2, arg);  // ioctl argument. Gets return value
-    return 0; // XXX need to get retval from HC
-}
+    struct hyper_file_op hyper_op;
+    hyper_op.type = HYPER_IOCTL;
+    strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
+    hyper_op.args.ioctl_args.cmd = cmd;
+    hyper_op.args.ioctl_args.arg = arg;
 
+    sync_struct(&hyper_op);
+
+    return hyper_op.rv; // Return the value fetched from the emulator
+}
 
 static struct file_operations fops = {
     .open = dev_open,
@@ -118,14 +203,12 @@ static int __init hyperdev_init(void) {
         return -EINVAL;
     }
 
-
-    // Allocate memory with error checking
+    // Allocate memory with error checking for device names and major numbers
     device_name = kmalloc(sizeof(char*) * num_devices, GFP_KERNEL);
     if (!device_name) {
         pr_err("Failed to allocate memory for device_name\n");
         return -ENOMEM;
     }
-
     device_major = kmalloc(sizeof(int) * num_devices, GFP_KERNEL);
     if (!device_major) {
         pr_err("Failed to allocate memory for device_major\n");
@@ -142,7 +225,6 @@ static int __init hyperdev_init(void) {
         return -ENOMEM;
     }
 
-
     while ((token = strsep(&str, ",")) != NULL) {
         device_name[i] = kstrdup(token, GFP_KERNEL);
         // Initialize device_major[i] appropriately
@@ -151,7 +233,7 @@ static int __init hyperdev_init(void) {
             printk(KERN_ALERT "Could not register device %s: %d\n", device_name[i], device_major[i]);
             return device_major[i];
         } else { 
-            printk(KERN_ALERT "Yay, registered device %s: %d\n", device_name[i], device_major[i]);
+            printk(KERN_ALERT "Registered device %s: %d\n", device_name[i], device_major[i]);
             current_dev = MKDEV(device_major[i], 0);
             device_create(my_class, NULL, current_dev, NULL, "%s", device_name[i]);
         }
@@ -181,4 +263,3 @@ static void __exit hyperdev_exit(void) {
 
 module_init(hyperdev_init);
 module_exit(hyperdev_exit);
-
