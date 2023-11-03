@@ -178,6 +178,13 @@ static struct file_operations fops = {
     .unlocked_ioctl = dev_ioctl,
 };
 
+static char *rw_devnode(struct device *dev, umode_t *mode) {
+    if (mode) {
+        *mode = 0666; // read-write permissions for user, group, and others
+    }
+    return NULL;
+}
+
 static int __init hyperdev_init(void) {
     char *str, *token;
     dev_t current_dev;
@@ -202,6 +209,10 @@ static int __init hyperdev_init(void) {
         printk(KERN_ALERT "Dyndev: Failed to create class.\n");
         return -EINVAL;
     }
+
+    // Ensure device is can be read & written by all users
+    my_class->devnode = rw_devnode;
+
 
     // Allocate memory with error checking for device names and major numbers
     device_name = kmalloc(sizeof(char*) * num_devices, GFP_KERNEL);
