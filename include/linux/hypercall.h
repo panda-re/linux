@@ -2,14 +2,22 @@
 #define HYPERCALL_H
 #include "linux/types.h"
 
-static inline void igloo_hypercall(uint32_t num, uint32_t a1) {
+static inline void igloo_hypercall(uint32_t num, uint32_t arg1) {
 #ifdef CONFIG_MIPS
-  asm volatile(
-    "movz $0, %[num], %[a1]": : [num] "r" (num), [a1] "r" (a1)
+    register unsigned long a0 asm("a0") = num;
+    register unsigned long a1 asm("a1") = arg1;
+
+    asm volatile(
+       "movz $0, $0, $0"
+        : "+r"(a0)  // Input and output in R0
+        : "r"(a1) // arg1 in register A1
+        : // No clobber
     );
+
+
 #elif defined(CONFIG_ARM)
   register uint32_t r0 asm("r0") = num;
-  register uint32_t r1 asm("r1") = a1;
+  register uint32_t r1 asm("r1") = arg1;
   asm volatile(
      "mov r0, %0 \t\n\
       mov r1, %1 \t\n\
