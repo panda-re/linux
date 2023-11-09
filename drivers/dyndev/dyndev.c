@@ -237,6 +237,11 @@ static int __init hyperdev_init(void) {
     }
 
     while ((token = strsep(&str, ",")) != NULL) {
+        if (!(*token)) {  // Check if the token is empty
+            // We'll hit this if no device name is provided at all
+            continue;
+        }
+
         device_name[i] = kstrdup(token, GFP_KERNEL);
         // Initialize device_major[i] appropriately
         device_major[i] = register_chrdev(0, device_name[i], &fops);
