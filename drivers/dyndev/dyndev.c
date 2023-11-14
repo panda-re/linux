@@ -8,6 +8,9 @@
 #include <linux/slab.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
+#include <linux/mm.h>
+#include <linux/sched.h>
+
 
 #include <linux/hypercall.h>
 #include <linux/dyndev.h>
@@ -99,6 +102,53 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
     return hyper_op.rv; // Return the value fetched from the emulator
 }
 
+// Work in progress, allow MMAP{,2} of devices
+#if 0
+static void my_vm_close(struct vm_area_struct *vma) {
+    // Retrieve the buffer
+    char *kernel_buffer = vma->vm_private_data;
+
+    // Use dev_write to send the data back to the hypervisor
+    loff_t offset = 0; // Set appropriate offset if needed
+    dev_write(NULL, kernel_buffer, vma->vm_end - vma->vm_start, &offset);
+
+    // Free the buffer
+    kfree(kernel_buffer);
+}
+
+static const struct vm_operations_struct my_vm_ops = {
+    .close = my_vm_close,  // Function to be called when the VMA is closed
+};
+
+static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
+    // Allocate a buffer and use dev_read to populate it
+    unsigned long pfn;
+    size_t len = vma->vm_end - vma->vm_start;
+    char *kernel_buffer = kmalloc(len, GFP_KERNEL);
+    loff_t offset = 0; // Set appropriate offset if needed
+    ssize_t read_bytes = dev_read(filp, kernel_buffer, len, &offset);
+
+    if (read_bytes < 0) {
+        kfree(kernel_buffer);
+        return -EIO;
+    }
+
+    // Map this buffer to user space
+    pfn = vmalloc_to_pfn(kernel_buffer);
+    if (remap_pfn_range(vma, vma->vm_start, pfn, len, vma->vm_page_prot)) {
+        kfree(kernel_buffer);
+        return -EAGAIN;
+    }
+
+    // Store kernel_buffer pointer for later use (e.g., in vm_ops)
+    vma->vm_ops = &my_vm_ops;
+    vma->vm_private_data = kernel_buffer;
+
+    return 0;
+}
+#endif
+
+
 static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
     struct hyper_file_op hyper_op;
     hyper_op.type = HYPER_IOCTL;
@@ -114,6 +164,7 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
 static struct file_operations fops = {
     .open = dev_open,
     .read = dev_read,
+    //.mmap = dev_mmap,
     .release = dev_release,
     .write = dev_write,
     .unlocked_ioctl = dev_ioctl,
