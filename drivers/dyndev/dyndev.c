@@ -12,6 +12,10 @@
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 
+#include <linux/mm_types.h>
+#include <linux/pagemap.h>
+#include <asm/pgtable.h>
+
 #include <linux/hypercall.h>
 #include <linux/dyndev.h>
 
@@ -131,6 +135,12 @@ static void my_vm_close(struct vm_area_struct *vma) {
     printk(KERN_INFO "dyndev close: virt %lx for hyper_file at %p\n", vma->vm_start, hyper_op);
 
     if (hyper_op && atomic_dec_and_test(&hyper_op->refcount)) {
+        kfree(hyper_op);
+        vma->vm_private_data = NULL;
+    }
+
+    #if 0
+    if (hyper_op && atomic_dec_and_test(&hyper_op->refcount)) {
         // Execute the hypercall for write
         //printk(KERN_INFO "\t: writing back to device %s\n", hyper_op->device_name);
         //printk(KERN_INFO "\t: kbuf is at %p\n", hyper_op->args.read_args.buffer);
@@ -150,71 +160,111 @@ static void my_vm_close(struct vm_area_struct *vma) {
 
         vma->vm_private_data = NULL;
     }
+    #endif
+}
+
+static int my_fault_handler(struct vm_area_struct *vma, struct vm_fault *vmf) {
+    struct page *page;
+    char *kernel_buffer;
+    struct hyper_file_op *hyper_op = vmf->vma->vm_private_data;
+    ssize_t ret;
+    unsigned long address = (unsigned long)vmf->address;
+    void *page_ptr;
+    bool is_write = vmf->flags & FAULT_FLAG_WRITE;
+    unsigned long pfn;
+
+    printk(KERN_INFO "dyndev: page fault at address %lx. Write=%d\n", address, is_write);
+
+    // Allocate a temporary kernel buffer
+    kernel_buffer = (char *)kmalloc(PAGE_SIZE, GFP_KERNEL);
+    if (!kernel_buffer) {
+        return VM_FAULT_OOM;
+    }
+
+    if (is_write) {
+        // Handle write fault: Copy data from user space to kernel buffer
+        if (copy_from_user(kernel_buffer, (char *)vmf->address, PAGE_SIZE)) {
+            kfree(kernel_buffer);
+            return VM_FAULT_SIGBUS;
+        }
+
+        // TODO: Add your write handling logic here
+        hyper_op->type = HYPER_WRITE;
+        hyper_op->args.write_args.buffer = kernel_buffer;
+        sync_struct(hyper_op);
+    } else {
+        // Handle read fault: Populate kernel buffer with data for user space
+        if (copy_to_user((char *)vmf->address, kernel_buffer, PAGE_SIZE)) {
+            kfree(kernel_buffer);
+            return VM_FAULT_SIGBUS;
+        }
+        hyper_op->type = HYPER_READ;
+        hyper_op->args.read_args.buffer = kernel_buffer;
+        sync_struct(hyper_op);
+    }
+
+    // Allocate a new page and copy data to it
+    page = alloc_page(GFP_KERNEL);
+    if (!page) {
+        kfree(kernel_buffer);
+        return VM_FAULT_OOM;
+    }
+    page_ptr = kmap(page);
+    memcpy(page_ptr, kernel_buffer, PAGE_SIZE);
+    kunmap(page);
+
+    // Convert the page to a PFN
+    pfn = page_to_pfn(page);
+
+    // Unmap the page to ensure the next access traps
+    zap_vma_ptes(vma, address & PAGE_MASK, PAGE_SIZE);
+
+    // Insert the page into the user space
+    ret = vm_insert_pfn(vma, address & PAGE_MASK, pfn);
+    if (ret) {
+        __free_page(page);
+        kfree(kernel_buffer);
+        return ret;
+    }
+
+    kfree(kernel_buffer);
+    return VM_FAULT_NOPAGE; // Indicate that the fault has been handled
 }
 
 static const struct vm_operations_struct my_vm_ops = {
     .open = my_vm_open,
     .close = my_vm_close,
+    .fault = my_fault_handler,
 };
 
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
-    size_t len = vma->vm_end - vma->vm_start;
     struct hyper_file_op* hyper_op;
-    struct page *page;
-    unsigned long start;
-    int ret = 0;
-
-    // Allocate contiguous memory pages
-    page = alloc_pages(GFP_KERNEL, get_order(len));
-    if (!page) {
-        pr_err("Failed to allocate memory for kernel_buffer\n");
-        return -ENOMEM;
-    }
-    start = (unsigned long)page_address(page);
 
     hyper_op = kmalloc(sizeof(struct hyper_file_op), GFP_KERNEL);
     if (!hyper_op) {
         pr_err("Failed to allocate memory for hyper_op\n");
-        __free_pages(page, get_order(len));
         return -ENOMEM;
     }
 
     atomic_set(&hyper_op->refcount, 1); // Initialize reference count
 
-    // Do a hypercall to read the data into the kernel buffer
-    hyper_op->type = HYPER_READ;
+    hyper_op->type = HYPER_READ; // Initialize for read, can be changed in fault handler
     strncpy(hyper_op->device_name, filp->f_path.dentry->d_iname, 127);
-    hyper_op->args.read_args.buffer = (char*)start;
     hyper_op->args.read_args.length = len;
     hyper_op->args.read_args.offset = 0;
+    //hyper_op->args.read_args.offset = vma->vm_pgoff << PAGE_SHIFT; // ???
 
     printk(KERN_ERR "dyndev: MMAPing device %s\n", hyper_op->device_name);
-    //printk(KERN_ERR "\t: vmalloc'd kernel_buffer at %lx\n", start);
-    //printk(KERN_ERR "\t: hyper_op struct at %p\n", hyper_op);
 
-    sync_struct(hyper_op);
-
-    if (hyper_op->rv < 0) {
-        __free_pages(page, get_order(len));
-        kfree(hyper_op);
-        return -EIO;
-    }
-
-    // Map the buffer to user space
-    ret = remap_pfn_range(vma, vma->vm_start, page_to_pfn(page), len, vma->vm_page_prot);
-    if (ret) {
-        pr_err("Failed to map buffer to user space\n");
-        __free_pages(page, get_order(len));
-        kfree(hyper_op);
-        return ret;
-    }
-
-    // Store hyper_op pointer for later use
-    vma->vm_ops = &my_vm_ops;
+    // Set up the VMA
+    vma->vm_ops = &my_vm_ops; // Set the custom vm_ops
     vma->vm_private_data = hyper_op;
+    vma->vm_flags |= VM_MIXEDMAP; // Indicate custom page fault handling
 
+    // Do not map any pages here. Let the fault handler take care of it.
     return 0;
 }
+
 
 
 static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
