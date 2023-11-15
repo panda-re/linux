@@ -12,7 +12,6 @@
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 
-
 #include <linux/hypercall.h>
 #include <linux/dyndev.h>
 
@@ -85,115 +84,132 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
     struct hyper_file_op hyper_op;
+    char *kernel_buffer;
+    ssize_t ret = 0;
+
+    kernel_buffer = kmalloc(len, GFP_KERNEL);
+    if (!kernel_buffer) {
+        return -ENOMEM;
+    }
+
+    if (copy_from_user(kernel_buffer, buffer, len)) {
+        kfree(kernel_buffer);
+        return -EFAULT;
+    }
+
     hyper_op.type = HYPER_WRITE;
     strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
-    hyper_op.args.write_args.buffer = buffer;
+    hyper_op.args.write_args.buffer = kernel_buffer;
     hyper_op.args.write_args.length = len;
     hyper_op.args.write_args.offset = *offset;
 
-    //printk(KERN_INFO "dyndev: Writing device %s with len %d and offset %lld\n", hyper_op.device_name, len, *offset);
     sync_struct(&hyper_op);
-    //printk(KERN_INFO "dyndev: hyper_op.rv = %ld\n", hyper_op.rv);
 
     // Now update the offset
     if (hyper_op.rv > 0) {
         *offset += hyper_op.rv;
+        ret = hyper_op.rv;
     }
-    //printk(KERN_INFO "dyndev: after write set offset to %lld\n", *offset);
-    return hyper_op.rv; // Return the value fetched from the emulator
+
+    kfree(kernel_buffer);
+    return ret; // Return the value fetched from the emulator
 }
 
 static void my_vm_open(struct vm_area_struct *vma) {
-    printk(KERN_INFO "dyndev: VMA open, virt %lx\n", vma->vm_start);
+    struct hyper_file_op* old_hyper_op = vma->vm_private_data;
+    //printk(KERN_INFO "dyndev open: virt %lx for hyper_file at %p\n", vma->vm_start, old_hyper_op);
+
+    // Increment reference count to prevent premature free in case of fork
+    if (old_hyper_op) {
+        atomic_inc(&old_hyper_op->refcount);
+    }
 }
 
 static void my_vm_close(struct vm_area_struct *vma) {
-    struct hyper_file_op* old_hyper_op = vma->vm_private_data;
+    struct hyper_file_op* hyper_op = vma->vm_private_data;
 
-    printk(KERN_INFO "dyndev: VMA close, virt %lx for hyper_file at %p\n", vma->vm_start, old_hyper_op);
+    printk(KERN_INFO "dyndev close: virt %lx for hyper_file at %p\n", vma->vm_start, hyper_op);
 
-    if (old_hyper_op) {
-        // Prepare and execute the hypercall for write
-        struct hyper_file_op hyper_op;
-        printk(KERN_INFO "Dyndev VMA close: writing back to device %s\n", old_hyper_op->device_name);
-        printk(KERN_INFO "Dyndev VMA close: kbuf is at %p\n", old_hyper_op->args.read_args.buffer);
+    if (hyper_op && atomic_dec_and_test(&hyper_op->refcount)) {
+        // Execute the hypercall for write
+        //printk(KERN_INFO "\t: writing back to device %s\n", hyper_op->device_name);
+        //printk(KERN_INFO "\t: kbuf is at %p\n", hyper_op->args.read_args.buffer);
 
-        hyper_op.type = HYPER_WRITE;
-        hyper_op.args.write_args.buffer = old_hyper_op->args.read_args.buffer;
-        hyper_op.args.write_args.length = old_hyper_op->args.read_args.length;
-        hyper_op.args.write_args.offset = old_hyper_op->args.read_args.offset;
-        sync_struct(&hyper_op);
+        hyper_op->type = HYPER_WRITE;
+        sync_struct(hyper_op);
+        //printk(KERN_INFO "\t: rv is %ld\n", hyper_op->rv);
 
-        // Check if the buffer is valid before freeing
-        if (old_hyper_op->args.read_args.buffer) {
-            printk(KERN_INFO "Dyndev VMA close: freeing vfree-ing kernel buf at %p\n", old_hyper_op->args.read_args.buffer);
-            vfree(old_hyper_op->args.read_args.buffer);
+        // Free the buffer and hyper op struct
+        if (hyper_op->args.read_args.buffer) {
+            //printk(KERN_INFO "\t: free_pages for kernel buf at %p\n", hyper_op->args.read_args.buffer);
+            free_pages((unsigned long)hyper_op->args.read_args.buffer, get_order(vma->vm_end - vma->vm_start));
         }
 
-        printk(KERN_INFO "Dyndev VMA close: kfreeing hyper op struct %p\n", old_hyper_op);
-        kfree(old_hyper_op);
+        //printk(KERN_INFO "\t: kfreeing hyper op struct %p\n", hyper_op);
+        kfree(hyper_op);
 
         vma->vm_private_data = NULL;
     }
 }
 
-
 static const struct vm_operations_struct my_vm_ops = {
     .open = my_vm_open,
-    .close = my_vm_close,  // Function to be called when the VMA is closed
+    .close = my_vm_close,
 };
 
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
-    // Allocate a buffer and use dev_read to populate it
-    unsigned long pfn;
-    unsigned long page;
     size_t len = vma->vm_end - vma->vm_start;
-    loff_t offset = 0; // Set appropriate offset if needed
     struct hyper_file_op* hyper_op;
+    struct page *page;
+    unsigned long start;
+    int ret = 0;
 
-     // Allocate buffer
-    char *kernel_buffer = vmalloc(len);
-    //char *kernel_buffer = kmalloc(len, GFP_KERNEL);
-    unsigned long start = (unsigned long)kernel_buffer;
-    unsigned long end = start + len;
-    if (!kernel_buffer) {
+    // Allocate contiguous memory pages
+    page = alloc_pages(GFP_KERNEL, get_order(len));
+    if (!page) {
         pr_err("Failed to allocate memory for kernel_buffer\n");
         return -ENOMEM;
     }
+    start = (unsigned long)page_address(page);
 
     hyper_op = kmalloc(sizeof(struct hyper_file_op), GFP_KERNEL);
     if (!hyper_op) {
-        pr_err("Failed to allocate memory for hc info\n");
-        vfree(kernel_buffer);
-        kfree(hyper_op);
+        pr_err("Failed to allocate memory for hyper_op\n");
+        __free_pages(page, get_order(len));
         return -ENOMEM;
     }
+
+    atomic_set(&hyper_op->refcount, 1); // Initialize reference count
 
     // Do a hypercall to read the data into the kernel buffer
     hyper_op->type = HYPER_READ;
     strncpy(hyper_op->device_name, filp->f_path.dentry->d_iname, 127);
-    hyper_op->args.read_args.buffer = kernel_buffer;
+    hyper_op->args.read_args.buffer = (char*)start;
     hyper_op->args.read_args.length = len;
-    hyper_op->args.read_args.offset = offset;
+    hyper_op->args.read_args.offset = 0;
 
-    printk(KERN_ERR "dyndev: MMAPing device %s with vmalloc'd kernel_buffer at %p and hyper_op struct at %p\n", hyper_op->device_name, kernel_buffer, hyper_op);
+    printk(KERN_ERR "dyndev: MMAPing device %s\n", hyper_op->device_name);
+    //printk(KERN_ERR "\t: vmalloc'd kernel_buffer at %lx\n", start);
+    //printk(KERN_ERR "\t: hyper_op struct at %p\n", hyper_op);
+
     sync_struct(hyper_op);
 
-
     if (hyper_op->rv < 0) {
-        vfree(kernel_buffer);
+        __free_pages(page, get_order(len));
         kfree(hyper_op);
         return -EIO;
     }
 
     // Map the buffer to user space
-    for (page = start; page < end; page += PAGE_SIZE) {
-        pfn = vmalloc_to_pfn((void *)page);
-        if (remap_pfn_range(vma, vma->vm_start + (page - start), pfn, PAGE_SIZE, vma->vm_page_prot))
-            return -EAGAIN;
+    ret = remap_pfn_range(vma, vma->vm_start, page_to_pfn(page), len, vma->vm_page_prot);
+    if (ret) {
+        pr_err("Failed to map buffer to user space\n");
+        __free_pages(page, get_order(len));
+        kfree(hyper_op);
+        return ret;
     }
 
-    // Store kernel_buffer pointer for later use (e.g., in vm_ops)
+    // Store hyper_op pointer for later use
     vma->vm_ops = &my_vm_ops;
     vma->vm_private_data = hyper_op;
 

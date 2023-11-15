@@ -1,6 +1,8 @@
 #ifndef DYNDEV_H
 #define DYNDEV_H
 #include <linux/hypercall.h>
+#include <linux/atomic.h>
+#include <linux/printk.h>
 #define HYPER_FILE_OP 0x100200
 #define MAX_DEVICES 64  // Maximum number of devices
 #define MAX_MTD_DEVICES 64  // Maximum number of MTD devices?
@@ -38,6 +40,7 @@ struct hyper_file_op {
         struct hyper_write_args write_args;
         struct hyper_ioctl_args ioctl_args;
     } args;
+    atomic_t refcount;
 };
 
 static inline void sync_struct(struct hyper_file_op* struct_instance) {
@@ -47,6 +50,7 @@ static inline void sync_struct(struct hyper_file_op* struct_instance) {
     while (max_tries-- > 0) {
         if (igloo_hypercall2(HYPER_FILE_OP, (unsigned long)struct_instance, (unsigned long)sizeof(struct hyper_file_op)) == 0)
             break;
+        printk(KERN_INFO "Dyndev: retrying in sync struct\n");
         for (i = 0; i < sizeof(struct hyper_file_op); i++) {
             // Ensure we read the entire structure just to make sure it's paged in
             junk += ((char*)struct_instance)[i];
