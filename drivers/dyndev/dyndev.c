@@ -10,6 +10,7 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/vmalloc.h>
 
 
 #include <linux/hypercall.h>
@@ -102,51 +103,102 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
     return hyper_op.rv; // Return the value fetched from the emulator
 }
 
-// Work in progress, allow MMAP{,2} of devices
-#if 0
-static void my_vm_close(struct vm_area_struct *vma) {
-    // Retrieve the buffer
-    char *kernel_buffer = vma->vm_private_data;
-
-    // Use dev_write to send the data back to the hypervisor
-    loff_t offset = 0; // Set appropriate offset if needed
-    dev_write(NULL, kernel_buffer, vma->vm_end - vma->vm_start, &offset);
-
-    // Free the buffer
-    kfree(kernel_buffer);
+static void my_vm_open(struct vm_area_struct *vma) {
+    printk(KERN_INFO "dyndev: VMA open, virt %lx\n", vma->vm_start);
 }
 
+static void my_vm_close(struct vm_area_struct *vma) {
+    struct hyper_file_op* old_hyper_op = vma->vm_private_data;
+
+    printk(KERN_INFO "dyndev: VMA close, virt %lx for hyper_file at %p\n", vma->vm_start, old_hyper_op);
+
+    if (old_hyper_op) {
+        // Prepare and execute the hypercall for write
+        struct hyper_file_op hyper_op;
+        printk(KERN_INFO "Dyndev VMA close: writing back to device %s\n", old_hyper_op->device_name);
+        printk(KERN_INFO "Dyndev VMA close: kbuf is at %p\n", old_hyper_op->args.read_args.buffer);
+
+        hyper_op.type = HYPER_WRITE;
+        hyper_op.args.write_args.buffer = old_hyper_op->args.read_args.buffer;
+        hyper_op.args.write_args.length = old_hyper_op->args.read_args.length;
+        hyper_op.args.write_args.offset = old_hyper_op->args.read_args.offset;
+        sync_struct(&hyper_op);
+
+        // Check if the buffer is valid before freeing
+        if (old_hyper_op->args.read_args.buffer) {
+            printk(KERN_INFO "Dyndev VMA close: freeing vfree-ing kernel buf at %p\n", old_hyper_op->args.read_args.buffer);
+            vfree(old_hyper_op->args.read_args.buffer);
+        }
+
+        printk(KERN_INFO "Dyndev VMA close: kfreeing hyper op struct %p\n", old_hyper_op);
+        kfree(old_hyper_op);
+
+        vma->vm_private_data = NULL;
+    }
+}
+
+
 static const struct vm_operations_struct my_vm_ops = {
+    .open = my_vm_open,
     .close = my_vm_close,  // Function to be called when the VMA is closed
 };
 
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
     // Allocate a buffer and use dev_read to populate it
     unsigned long pfn;
+    unsigned long page;
     size_t len = vma->vm_end - vma->vm_start;
-    char *kernel_buffer = kmalloc(len, GFP_KERNEL);
     loff_t offset = 0; // Set appropriate offset if needed
-    ssize_t read_bytes = dev_read(filp, kernel_buffer, len, &offset);
+    struct hyper_file_op* hyper_op;
 
-    if (read_bytes < 0) {
-        kfree(kernel_buffer);
+     // Allocate buffer
+    char *kernel_buffer = vmalloc(len);
+    //char *kernel_buffer = kmalloc(len, GFP_KERNEL);
+    unsigned long start = (unsigned long)kernel_buffer;
+    unsigned long end = start + len;
+    if (!kernel_buffer) {
+        pr_err("Failed to allocate memory for kernel_buffer\n");
+        return -ENOMEM;
+    }
+
+    hyper_op = kmalloc(sizeof(struct hyper_file_op), GFP_KERNEL);
+    if (!hyper_op) {
+        pr_err("Failed to allocate memory for hc info\n");
+        vfree(kernel_buffer);
+        kfree(hyper_op);
+        return -ENOMEM;
+    }
+
+    // Do a hypercall to read the data into the kernel buffer
+    hyper_op->type = HYPER_READ;
+    strncpy(hyper_op->device_name, filp->f_path.dentry->d_iname, 127);
+    hyper_op->args.read_args.buffer = kernel_buffer;
+    hyper_op->args.read_args.length = len;
+    hyper_op->args.read_args.offset = offset;
+
+    printk(KERN_ERR "dyndev: MMAPing device %s with vmalloc'd kernel_buffer at %p and hyper_op struct at %p\n", hyper_op->device_name, kernel_buffer, hyper_op);
+    sync_struct(hyper_op);
+
+
+    if (hyper_op->rv < 0) {
+        vfree(kernel_buffer);
+        kfree(hyper_op);
         return -EIO;
     }
 
-    // Map this buffer to user space
-    pfn = vmalloc_to_pfn(kernel_buffer);
-    if (remap_pfn_range(vma, vma->vm_start, pfn, len, vma->vm_page_prot)) {
-        kfree(kernel_buffer);
-        return -EAGAIN;
+    // Map the buffer to user space
+    for (page = start; page < end; page += PAGE_SIZE) {
+        pfn = vmalloc_to_pfn((void *)page);
+        if (remap_pfn_range(vma, vma->vm_start + (page - start), pfn, PAGE_SIZE, vma->vm_page_prot))
+            return -EAGAIN;
     }
 
     // Store kernel_buffer pointer for later use (e.g., in vm_ops)
     vma->vm_ops = &my_vm_ops;
-    vma->vm_private_data = kernel_buffer;
+    vma->vm_private_data = hyper_op;
 
     return 0;
 }
-#endif
 
 
 static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
@@ -162,9 +214,10 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
 }
 
 static struct file_operations fops = {
+	.owner =	  THIS_MODULE,
     .open = dev_open,
     .read = dev_read,
-    //.mmap = dev_mmap,
+    .mmap = dev_mmap,
     .release = dev_release,
     .write = dev_write,
     .unlocked_ioctl = dev_ioctl,
