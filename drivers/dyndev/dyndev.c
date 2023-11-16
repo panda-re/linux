@@ -16,6 +16,8 @@
 #include <linux/pagemap.h>
 #include <asm/pgtable.h>
 
+#include <linux/proc_fs.h>
+
 #include <linux/hypercall.h>
 #include <linux/dyndev.h>
 
@@ -27,15 +29,22 @@ MODULE_DESCRIPTION("Dynamic devices");
 bool hook_mtd=false; // Set by dyndev, checked by mtdpart
 EXPORT_SYMBOL(hook_mtd);
 
-static struct class*  my_class  = NULL; // The device-driver class struct pointer
-
 static char *devnames = "";
 module_param(devnames, charp, 0000);
 MODULE_PARM_DESC(devnames, "A comma-separated list of device names");
 
+static char *procnames = "";
+module_param(procnames, charp, 0000);
+MODULE_PARM_DESC(procnames, "A comma-separated list of proc names");
+
 static char **device_name;
 static int *device_major;
 static int num_devices = 0;
+
+static char **proc_name;
+static int num_procs = 0;
+
+static struct class* my_class  = NULL; // The device-driver class struct pointer
 
 static int dev_open(struct inode *inodep, struct file *filep) {
     return 0;
@@ -296,16 +305,14 @@ static char *rw_devnode(struct device *dev, umode_t *mode) {
     return NULL;
 }
 
-static int __init hyperdev_init(void) {
+int init_devices(void) {
     char *str, *token;
     dev_t current_dev;
     int i=0;
 
-    if (devnames == NULL) {
-      return -EINVAL;
+    if (!devnames) {
+        return 0;
     }
-
-    pr_emerg("dyndev: Initializing the dyndev module\n");
 
     // First, count the number of devices to allocate memory
     for (str = devnames; *str; str++) {
@@ -374,11 +381,10 @@ static int __init hyperdev_init(void) {
         }
         i++;
     }
-
     return 0;
 }
 
-static void __exit hyperdev_exit(void) {
+void free_devices(void) {
     int i;
     dev_t current_dev;
     for (i = 0; i < num_devices; i++) {
@@ -392,6 +398,138 @@ static void __exit hyperdev_exit(void) {
     // Destroy the class
     class_destroy(my_class);
     kfree(device_major);
+}
+
+//////////////// Proc files ///////////////
+#define MAX_PROC_SIZE 1024
+static char proc_data[MAX_PROC_SIZE];
+static struct proc_dir_entry **proc_files; // XXX do we want to track all of these?
+
+static ssize_t proc_read(struct file *file, char __user *ubuf, size_t count, loff_t *ppos) 
+{
+    printk(KERN_INFO "Read from proc file\n");
+    return simple_read_from_buffer(ubuf, count, ppos, proc_data, strlen(proc_data));
+}
+
+// Proc write function
+static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos)
+{
+    size_t len = min(count, sizeof(proc_data) - 1);
+    if (copy_from_user(proc_data, ubuf, len)) {
+        return -EFAULT;
+    }
+    proc_data[len] = '\0';
+    printk(KERN_INFO "Write to proc file: %s\n", proc_data);
+    return len;
+}
+
+// File operations for our proc file
+static struct file_operations proc_fops = {
+    .owner = THIS_MODULE,
+    .read = proc_read,
+    .write = proc_write,
+};
+
+int init_procs(void) {
+    char *str, *token;
+    int i = 0;
+
+    if (!procnames) {
+        printk(KERN_INFO "dyndev: no proc names provided\n");
+        return 0;
+    }
+    str = procnames; 
+
+    // Count the number of devices to allocate memory
+    num_procs = 1; // Start from 1 for at least one device
+    for (; *str; str++) {
+        if (*str == ',') {
+            num_procs++;
+        }
+    }
+
+    printk(KERN_INFO "dyndev: found %d proc names\n", num_procs);
+
+    // Allocate memory for proc names and proc files
+    proc_name = kmalloc(sizeof(char*) * num_procs, GFP_KERNEL);
+    proc_files = kmalloc(sizeof(struct proc_dir_entry*) * num_procs, GFP_KERNEL);
+    if (!proc_name || !proc_files) {
+        pr_err("dyndev: failed to allocate memory for proc structures\n");
+        kfree(proc_name);
+        kfree(proc_files);
+        return -ENOMEM;
+    }
+
+    str = procnames; // Reset str to start of procnames
+    while ((token = strsep(&str, ",")) != NULL) {
+        if (!(*token)) {
+            continue;
+        }
+        proc_name[i] = kstrdup(token, GFP_KERNEL); // Store the name
+        if (!proc_name[i]) {
+            // Cleanup on error
+            while (i > 0) {
+                kfree(proc_name[--i]);
+                remove_proc_entry(proc_name[i], NULL);
+            }
+            kfree(proc_name);
+            kfree(proc_files);
+            return -ENOMEM;
+        }
+
+        printk(KERN_INFO "dyndev: creating proc file %s\n", proc_name[i]);
+        proc_files[i] = proc_create(proc_name[i], 0666, NULL, &proc_fops);
+        if (!proc_files[i]) {
+            // Cleanup on error
+            while (i >= 0) {
+                kfree(proc_name[i]);
+                if (proc_files[i]) {
+                    remove_proc_entry(proc_name[i], NULL);
+                }
+                i--;
+            }
+            kfree(proc_name);
+            kfree(proc_files);
+            return -ENOMEM;
+        }
+        i++;
+    }
+    return 0;
+}
+
+void free_procs(void) {
+    int i;
+    for (i = 0; i < num_procs; i++) {
+        if (proc_name[i]) {
+            remove_proc_entry(proc_name[i], NULL);
+            kfree(proc_name[i]);
+        }
+    }
+    kfree(proc_name);
+    kfree(proc_files);
+}
+
+static int __init hyperdev_init(void) {
+    int rv;
+    pr_emerg("dyndev: Initializing the dyndev module\n");
+
+    rv = init_devices();
+    if (rv < 0) {
+        return rv;
+    }
+
+    rv = init_procs();
+    if (rv < 0) {
+        return rv;
+    }
+
+    printk(KERN_INFO "Module loaded.\n");
+    return 0;
+}
+
+static void __exit hyperdev_exit(void) {
+    free_devices();
+    free_procs();
 }
 
 module_init(hyperdev_init);
