@@ -46,59 +46,43 @@ static int num_procs = 0;
 
 static struct class* my_class  = NULL; // The device-driver class struct pointer
 
-static int dev_open(struct inode *inodep, struct file *filep) {
-    return 0;
-}
-
-static int dev_release(struct inode *inodep, struct file *filep) {
-    return 0;
-}
-
-static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset) {
-    char* kernel_buffer;
+// Unified read function for hypervisor interaction
+ssize_t hypervisor_read(const char *device_name, char *buffer, size_t len, loff_t *offset) {
+    char *kernel_buffer;
     struct hyper_file_op hyper_op;
-    hyper_op.type = HYPER_READ;
-    strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
+    ssize_t ret;
 
-    // Our plugin needs to write a buffer - let's use a kernel buffer and copy at the end
-    // Allocate a buffer of size len
     kernel_buffer = kmalloc(len, GFP_KERNEL);
     if (!kernel_buffer) {
-        pr_err("Failed to allocate memory for kernel_buffer\n");
         return -ENOMEM;
     }
 
+    hyper_op.type = HYPER_READ;
+    strncpy(hyper_op.device_name, device_name, 127);
     hyper_op.args.read_args.buffer = kernel_buffer;
     hyper_op.args.read_args.length = len;
     hyper_op.args.read_args.offset = *offset;
-    //printk(KERN_INFO "dyndev: Reading from device %s with len %d and offset %lld\n", hyper_op.device_name, len, *offset);
 
     sync_struct(&hyper_op);
 
-    //printk(KERN_INFO "dyndev: hyper_op.rv = %ld\n", hyper_op.rv);
-
-    // Now copy from the kernel buffer to the user buffer - use copy_to_user
     if (copy_to_user(buffer, kernel_buffer, len)) {
-        pr_err("Failed to copy kernel_buffer to user buffer\n");
-        return -EFAULT;
+        ret = -EFAULT;
+    } else {
+        if (hyper_op.rv > 0) {
+            *offset += hyper_op.rv;
+        }
+        ret = hyper_op.rv;
     }
 
-    // Now update the offset
-    if (hyper_op.rv > 0) {
-        *offset += hyper_op.rv;
-    }
-    //printk(KERN_INFO "dyndev: after read set offset to %ld\n", *offset);
-
-    // Free our buffer
     kfree(kernel_buffer);
-
-    return hyper_op.rv; // Return the value fetched from the emulator
+    return ret;
 }
 
-static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
-    struct hyper_file_op hyper_op;
+// Unified write function for hypervisor interaction
+ssize_t hypervisor_write(const char *device_name, const char *buffer, size_t len, loff_t *offset) {
     char *kernel_buffer;
-    ssize_t ret = 0;
+    struct hyper_file_op hyper_op;
+    ssize_t ret;
 
     kernel_buffer = kmalloc(len, GFP_KERNEL);
     if (!kernel_buffer) {
@@ -111,21 +95,41 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
     }
 
     hyper_op.type = HYPER_WRITE;
-    strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
+    strncpy(hyper_op.device_name, device_name, 127);
     hyper_op.args.write_args.buffer = kernel_buffer;
     hyper_op.args.write_args.length = len;
     hyper_op.args.write_args.offset = *offset;
 
     sync_struct(&hyper_op);
 
-    // Now update the offset
     if (hyper_op.rv > 0) {
         *offset += hyper_op.rv;
-        ret = hyper_op.rv;
     }
+    ret = hyper_op.rv;
 
     kfree(kernel_buffer);
-    return ret; // Return the value fetched from the emulator
+    return ret;
+}
+
+static int dev_open(struct inode *inodep, struct file *filep) {
+    return 0;
+}
+
+static int dev_release(struct inode *inodep, struct file *filep) {
+    return 0;
+}
+
+static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset) {
+    // We need to prepend the filename with /dev/ to get the full path
+    char full_path[128];
+    snprintf(full_path, 128, "/dev/%s", filep->f_path.dentry->d_iname);
+    return hypervisor_read(full_path, buffer, len, offset);
+}
+
+static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset) {
+    char full_path[128];
+    snprintf(full_path, 128, "/dev/%s", filep->f_path.dentry->d_iname);
+    return hypervisor_write(full_path, buffer, len, offset);
 }
 
 static void my_vm_open(struct vm_area_struct *vma) {
@@ -402,25 +406,26 @@ void free_devices(void) {
 
 //////////////// Proc files ///////////////
 #define MAX_PROC_SIZE 1024
-static char proc_data[MAX_PROC_SIZE];
 static struct proc_dir_entry **proc_files; // XXX do we want to track all of these?
 
-static ssize_t proc_read(struct file *file, char __user *ubuf, size_t count, loff_t *ppos) 
-{
-    printk(KERN_INFO "Read from proc file\n");
-    return simple_read_from_buffer(ubuf, count, ppos, proc_data, strlen(proc_data));
+static ssize_t proc_read(struct file *file, char __user *ubuf, size_t count, loff_t *ppos) {
+    char full_path[128];
+    if (!file->f_path.dentry->d_iname) {
+        return -EINVAL;
+    }
+    snprintf(full_path, 128, "/proc/%s", file->f_path.dentry->d_iname);
+    printk(KERN_INFO "dyndev: proc read for %s\n", full_path);
+    return hypervisor_read(full_path, ubuf, count, ppos);
 }
 
-// Proc write function
-static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos)
-{
-    size_t len = min(count, sizeof(proc_data) - 1);
-    if (copy_from_user(proc_data, ubuf, len)) {
-        return -EFAULT;
+static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos) {
+    char full_path[128];
+    if (!file->f_path.dentry->d_iname) {
+        return -EINVAL;
     }
-    proc_data[len] = '\0';
-    printk(KERN_INFO "Write to proc file: %s\n", proc_data);
-    return len;
+    snprintf(full_path, 128, "/proc/%s", file->f_path.dentry->d_iname);
+    printk(KERN_INFO "dyndev: proc write for %s\n", full_path);
+    return hypervisor_write(full_path, ubuf, count, ppos);
 }
 
 // File operations for our proc file
@@ -500,7 +505,7 @@ int init_procs(void) {
 void free_procs(void) {
     int i;
     for (i = 0; i < num_procs; i++) {
-        if (proc_name[i]) {
+        if (proc_files[i]) {
             remove_proc_entry(proc_name[i], NULL);
             kfree(proc_name[i]);
         }
@@ -508,6 +513,7 @@ void free_procs(void) {
     kfree(proc_name);
     kfree(proc_files);
 }
+
 
 static int __init hyperdev_init(void) {
     int rv;

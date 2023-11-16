@@ -43,6 +43,11 @@ struct hyper_file_op {
     atomic_t refcount;
 };
 
+struct proc_data {
+    char name[128];
+};
+
+
 static inline void sync_struct(struct hyper_file_op* struct_instance) {
     int i;
     volatile char junk = 0;
