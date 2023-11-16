@@ -51,6 +51,7 @@ ssize_t hypervisor_read(const char *device_name, char *buffer, size_t len, loff_
     char *kernel_buffer;
     struct hyper_file_op hyper_op;
     ssize_t ret;
+    //printk(KERN_INFO "dyndev: read for device %s\n", device_name);
 
     kernel_buffer = kmalloc(len, GFP_KERNEL);
     if (!kernel_buffer) {
@@ -83,6 +84,7 @@ ssize_t hypervisor_write(const char *device_name, const char *buffer, size_t len
     char *kernel_buffer;
     struct hyper_file_op hyper_op;
     ssize_t ret;
+    //printk(KERN_INFO "dyndev: write for device %s\n", device_name);
 
     kernel_buffer = kmalloc(len, GFP_KERNEL);
     if (!kernel_buffer) {
@@ -262,7 +264,7 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
     atomic_set(&hyper_op->refcount, 1); // Initialize reference count
 
     hyper_op->type = HYPER_READ; // Initialize for read, can be changed in fault handler
-    strncpy(hyper_op->device_name, filp->f_path.dentry->d_iname, 127);
+    snprintf(hyper_op->device_name, 128, "/dev/%s", filp->f_path.dentry->d_iname);
     hyper_op->args.read_args.length = len;
     hyper_op->args.read_args.offset = 0;
     //hyper_op->args.read_args.offset = vma->vm_pgoff << PAGE_SHIFT; // ???
@@ -283,7 +285,7 @@ static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
 static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg) {
     struct hyper_file_op hyper_op;
     hyper_op.type = HYPER_IOCTL;
-    strncpy(hyper_op.device_name, filep->f_path.dentry->d_iname, 127);
+    snprintf(hyper_op.device_name, 128, "/dev/%s", filep->f_path.dentry->d_iname);
     hyper_op.args.ioctl_args.cmd = cmd;
     hyper_op.args.ioctl_args.arg = arg;
 
@@ -314,7 +316,7 @@ int init_devices(void) {
     dev_t current_dev;
     int i=0;
 
-    if (!devnames) {
+    if (!devnames || !(*devnames)) {
         return 0;
     }
 
@@ -439,7 +441,7 @@ int init_procs(void) {
     char *str, *token;
     int i = 0;
 
-    if (!procnames) {
+    if (!procnames || !(*procnames)) {
         printk(KERN_INFO "dyndev: no proc names provided\n");
         return 0;
     }
