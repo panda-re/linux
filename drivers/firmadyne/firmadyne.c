@@ -17,8 +17,8 @@ MODULE_VERSION("0.1");
 short devfs = 0;
 short execute = 1;
 short reboot = 1;
-short procfs = 1;
-short syscall = 255;
+short procfs = 0;
+short syscall = 0;
 
 module_param(devfs, short, 0660);
 MODULE_PARM_DESC(devfs, "Enable devfs stub device emulation");
