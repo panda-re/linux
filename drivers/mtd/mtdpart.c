@@ -75,7 +75,7 @@ static int part_read(struct mtd_info *mtd, loff_t from, size_t len,
 if (hook_mtd) {
 	// XXX: IGLOO SPECIFIC - use hypercalls for reads of mtd device
     hyper_op.type = HYPER_READ;
-	snprintf(hyper_op.device_name, sizeof(hyper_op.device_name), "mtd%d", mtd->index); // mtd index tells us partition number
+	snprintf(hyper_op.device_name, sizeof(hyper_op.device_name), "/dev/mtd%d", mtd->index); // mtd index tells us partition number
 
 
 	// XXX buf is a kernel buffer!
@@ -207,7 +207,7 @@ static int part_write(struct mtd_info *mtd, loff_t to, size_t len,
 if (hook_mtd) {
 	// XXX: IGLOO SPECIFIC - use hypercalls for reads of mtd device
     hyper_op.type = HYPER_WRITE;
-	snprintf(hyper_op.device_name, sizeof(hyper_op.device_name), "mtd%d", mtd->index); // mtd index tells us partition number
+	snprintf(hyper_op.device_name, sizeof(hyper_op.device_name), "/dev/mtd%d", mtd->index); // mtd index tells us partition number
 
     hyper_op.args.write_args.buffer = (char*)buf;
     hyper_op.args.write_args.length = len;

@@ -1,6 +1,7 @@
 #include <asm/uaccess.h>
 #include <linux/device.h>
 #include <linux/fs.h>
+#include <linux/path.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -407,28 +408,59 @@ void free_devices(void) {
 }
 
 //////////////// Proc files ///////////////
-#define MAX_PROC_SIZE 1024
-static struct proc_dir_entry **proc_files; // XXX do we want to track all of these?
+static struct proc_dir_entry **proc_files;
+
+static void get_full_proc_path(struct file *file, char *path, size_t path_len) {
+    struct dentry *dentry;
+    struct path f_path;
+    char* p;
+    char *buf = (char *)__get_free_page(GFP_TEMPORARY);
+
+    if (!buf) {
+        path[0] = '\0';
+        return;
+    }
+
+    f_path = file->f_path;
+    dentry = f_path.dentry;
+
+    /* Get the full path. This will put the path in reverse order */
+    p = dentry_path_raw(dentry, buf, PAGE_SIZE);
+
+    if (IS_ERR(p)) {
+        path[0] = '\0';
+    } else {
+        /* Reverse the path to get it in the correct order */
+        snprintf(path, path_len, "/proc%s", p);
+    }
+
+    free_page((unsigned long)buf);
+}
 
 static ssize_t proc_read(struct file *file, char __user *ubuf, size_t count, loff_t *ppos) {
     char full_path[128];
-    if (!file->f_path.dentry->d_iname) {
+
+    get_full_proc_path(file, full_path, sizeof(full_path));
+    if (strlen(full_path) == 0) {
         return -EINVAL;
     }
-    snprintf(full_path, 128, "/proc/%s", file->f_path.dentry->d_iname);
+
     printk(KERN_INFO "dyndev: proc read for %s\n", full_path);
     return hypervisor_read(full_path, ubuf, count, ppos);
 }
 
 static ssize_t proc_write(struct file *file, const char __user *ubuf, size_t count, loff_t *ppos) {
     char full_path[128];
-    if (!file->f_path.dentry->d_iname) {
+
+    get_full_proc_path(file, full_path, sizeof(full_path));
+    if (strlen(full_path) == 0) {
         return -EINVAL;
     }
-    snprintf(full_path, 128, "/proc/%s", file->f_path.dentry->d_iname);
+
     printk(KERN_INFO "dyndev: proc write for %s\n", full_path);
     return hypervisor_write(full_path, ubuf, count, ppos);
 }
+
 
 // File operations for our proc file
 static struct file_operations proc_fops = {
@@ -437,9 +469,48 @@ static struct file_operations proc_fops = {
     .write = proc_write,
 };
 
+static struct proc_dir_entry *create_procfs_dir(const char *path) {
+    char *dup_path, *token, *delimiter = "/";
+    char current_path[256] = {0};
+    struct proc_dir_entry *parent = NULL;
+
+    dup_path = kstrdup(path, GFP_KERNEL);
+    if (!dup_path) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    if (dup_path[0] == '/') {
+        token = strsep(&dup_path, delimiter); // Skip leading slash if present
+    }
+
+    token = strsep(&dup_path, delimiter); // Get the first token
+    while (token != NULL) {
+        // Construct the current path
+        if (*current_path) {
+            strcat(current_path, "/");
+        }
+        strcat(current_path, token);
+
+        // Create the directory
+        printk(KERN_INFO "dyndev: creating procfs directory %s\n", current_path);
+        parent = proc_mkdir(current_path, NULL);
+        if (!parent) {
+            kfree(dup_path);
+            return ERR_PTR(-ENOMEM);
+        }
+
+        token = strsep(&dup_path, delimiter); // Move to next token
+    }
+
+    kfree(dup_path);
+    return parent; // Return the parent directory's proc_dir_entry
+}
+
+
 int init_procs(void) {
-    char *str, *token;
+    char *str, *token, *file_name;
     int i = 0;
+    struct proc_dir_entry *parent = NULL;
 
     if (!procnames || !(*procnames)) {
         printk(KERN_INFO "dyndev: no proc names provided\n");
@@ -472,36 +543,47 @@ int init_procs(void) {
         if (!(*token)) {
             continue;
         }
-        proc_name[i] = kstrdup(token, GFP_KERNEL); // Store the name
-        if (!proc_name[i]) {
-            // Cleanup on error
-            while (i > 0) {
-                kfree(proc_name[--i]);
-                remove_proc_entry(proc_name[i], NULL);
+        // Separate directory path and file name
+        file_name = strrchr(token, '/');
+        if (file_name) {
+            *file_name = '\0'; // Temporarily end the string to get directory path
+            parent = create_procfs_dir(token);
+            if (IS_ERR(parent)) {
+                pr_err("dyndev: failed to create procfs directory for %s: %ld\n", token, PTR_ERR(parent));
+                goto error;
             }
-            kfree(proc_name);
-            kfree(proc_files);
-            return -ENOMEM;
+            *file_name = '/'; // Restore the slash
+            file_name++; // Move to the start of the file name
+        } else {
+            parent = NULL; // No parent directory
+            file_name = token; // The entire token is the file name
+        }
+
+        proc_name[i] = kstrdup(file_name, GFP_KERNEL);
+        if (!proc_name[i]) {
+            goto error;
         }
 
         printk(KERN_INFO "dyndev: creating proc file %s\n", proc_name[i]);
-        proc_files[i] = proc_create(proc_name[i], 0666, NULL, &proc_fops);
+        proc_files[i] = proc_create(proc_name[i], 0666, parent, &proc_fops);
         if (!proc_files[i]) {
-            // Cleanup on error
-            while (i >= 0) {
-                kfree(proc_name[i]);
-                if (proc_files[i]) {
-                    remove_proc_entry(proc_name[i], NULL);
-                }
-                i--;
-            }
-            kfree(proc_name);
-            kfree(proc_files);
-            return -ENOMEM;
+            goto error;
         }
         i++;
     }
     return 0;
+    
+error:
+    while (i > 0) {
+        i--;
+        kfree(proc_name[i]);
+        if (proc_files[i]) {
+            remove_proc_entry(proc_name[i], NULL);
+        }
+    }
+    kfree(proc_name);
+    kfree(proc_files);
+    return -ENOMEM;
 }
 
 void free_procs(void) {
