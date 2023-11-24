@@ -55,7 +55,9 @@ static inline void sync_struct(struct hyper_file_op* struct_instance) {
     while (max_tries-- > 0) {
         if (igloo_hypercall2(HYPER_FILE_OP, (unsigned long)struct_instance, (unsigned long)sizeof(struct hyper_file_op)) == 0)
             break;
-        printk(KERN_INFO "Dyndev: retrying in sync struct\n");
+        if (max_tries < 98) {
+            printk(KERN_INFO "Dyndev: multiple retrying in sync struct: %d\n", 100-max_tries);
+        }
         for (i = 0; i < sizeof(struct hyper_file_op); i++) {
             // Ensure we read the entire structure just to make sure it's paged in
             junk += ((char*)struct_instance)[i];
