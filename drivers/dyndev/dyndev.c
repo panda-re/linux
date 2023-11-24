@@ -255,6 +255,7 @@ static const struct vm_operations_struct my_vm_ops = {
 
 static int dev_mmap(struct file *filp, struct vm_area_struct *vma) {
     struct hyper_file_op* hyper_op;
+    size_t len = vma->vm_end - vma->vm_start;
 
     hyper_op = kmalloc(sizeof(struct hyper_file_op), GFP_KERNEL);
     if (!hyper_op) {
