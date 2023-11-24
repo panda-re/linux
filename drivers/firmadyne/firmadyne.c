@@ -14,7 +14,7 @@ MODULE_AUTHOR("Dominic Chen <ddchen@cmu.edu>");
 MODULE_DESCRIPTION("Firmware analysis and emulation support");
 MODULE_VERSION("0.1");
 
-short devfs = 1;
+short devfs = 0;
 short execute = 1;
 short reboot = 1;
 short procfs = 1;
