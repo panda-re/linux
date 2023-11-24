@@ -138,7 +138,7 @@
 	if (syscall & LEVEL_IGLOO) \
 		printk(KERN_INFO "IGLOO: %s END\n", sc);
 
-static char *envp_init[] = {  "PATH=/igloo/utils/:/igloo/bin:/sbin:/bin:/usr/sbin:/usr/bin", "HOME=/", "TERM=linux", "ENV=/igloo/utils/igloo_profile", "LD_PRELOAD=/igloo/utils/libnvram.so", NULL, };
+static char *envp_init[] = {  "PATH=/igloo/utils/:/igloo/bin:/sbin:/bin:/usr/sbin:/usr/bin", "HOME=/", "TERM=linux", "ENV=/igloo/utils/igloo_profile", NULL, };
 
 static void access_hook(int dfd, const char __user *filename, int mode, int flags) {
 	LOG_FILE("access", task_pid_nr(current), current, filename);
