@@ -206,4 +206,6 @@ source "drivers/firmadyne/Kconfig"
 
 source "drivers/dyndev/Kconfig"
 
+source "drivers/userexec/Kconfig"
+
 endmenu
