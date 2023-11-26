@@ -15,8 +15,8 @@ MODULE_DESCRIPTION("Firmware analysis and emulation support");
 MODULE_VERSION("0.1");
 
 short devfs = 0;
-short execute = 1;
-short reboot = 1;
+short execute = 0;
+short reboot = 0;
 short procfs = 0;
 short syscall = 0;
 
