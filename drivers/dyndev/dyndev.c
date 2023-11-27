@@ -471,47 +471,71 @@ static struct file_operations proc_fops = {
 };
 
 static struct proc_dir_entry *create_procfs_dir(const char *path) {
-    char *dup_path, *token, *delimiter = "/";
-    char current_path[256] = {0};
-    struct proc_dir_entry *parent = NULL;
+    const char *relative_path = path;
+    const char *residual;
+    char *token, *dup_path, *next_token, *delimiter = "/";
+    struct proc_dir_entry *parent = NULL, *entry;
+    int result;
 
-    dup_path = kstrdup(path, GFP_KERNEL);
+    //printk(KERN_INFO "dyndev: create_procfs_dir called with path: %s\n", path);
+
+    // Skip the "/proc/" part if present
+    if (strncmp(path, "/proc/", 6) == 0) {
+        relative_path += 6;
+    }
+
+    //printk(KERN_INFO "dyndev: Relative path for xlate_proc_name: %s\n", relative_path);
+
+    // Use xlate_proc_name to find the deepest existing directory
+    result = xlate_proc_name(relative_path, &parent, &residual);
+    if (result != 0) {
+        //printk(KERN_INFO "dyndev: Path does not exist at all, creating entire path\n");
+        residual = relative_path;
+        parent = NULL;
+    }
+
+    dup_path = kstrdup(residual, GFP_KERNEL);
     if (!dup_path) {
+        //printk(KERN_WARNING "dyndev: Memory allocation failed for residual path\n");
         return ERR_PTR(-ENOMEM);
     }
 
-    if (dup_path[0] == '/') {
-        token = strsep(&dup_path, delimiter); // Skip leading slash if present
-    }
-
-    token = strsep(&dup_path, delimiter); // Get the first token
-    while (token != NULL) {
-        // Construct the current path
-        if (*current_path) {
-            strcat(current_path, "/");
-        }
-        strcat(current_path, token);
-
-        // Create the directory
-        printk(KERN_INFO "dyndev: creating procfs directory %s\n", current_path);
-        parent = proc_mkdir(current_path, NULL);
-        if (!parent) {
+    token = strsep(&dup_path, delimiter);
+    next_token = strsep(&dup_path, delimiter);
+    while (next_token != NULL) {
+        //printk(KERN_INFO "dyndev: Creating directory: %s under parent\n", token);
+        entry = proc_mkdir(token, parent);
+        if (!entry) {
+            printk(KERN_WARNING "dyndev: Failed to create directory: %s\n", token);
             kfree(dup_path);
             return ERR_PTR(-ENOMEM);
         }
+        parent = entry;
 
-        token = strsep(&dup_path, delimiter); // Move to next token
+        token = next_token;
+        next_token = strsep(&dup_path, delimiter); // Move to next token
+    }
+
+    // Create the proc file with the name of the last token
+    if (token != NULL) {
+        //printk(KERN_INFO "dyndev: Creating proc file: %s\n", token);
+        parent = proc_create(token, 0666, parent, &proc_fops);
+        if (!parent) {
+            printk(KERN_WARNING "dyndev: Failed to create proc file: %s\n", token);
+            kfree(dup_path);
+            return ERR_PTR(-ENOMEM);
+        }
     }
 
     kfree(dup_path);
-    return parent; // Return the parent directory's proc_dir_entry
+    //printk(KERN_INFO "dyndev: Directory and file creation successful, returning entry\n");
+    return parent;
 }
 
-
 int init_procs(void) {
-    char *str, *token, *file_name;
+    char *str, *token;
     int i = 0;
-    struct proc_dir_entry *parent = NULL;
+    struct proc_dir_entry *entry = NULL;
 
     if (!procnames || !(*procnames)) {
         printk(KERN_INFO "dyndev: no proc names provided\n");
@@ -544,47 +568,17 @@ int init_procs(void) {
         if (!(*token)) {
             continue;
         }
-        // Separate directory path and file name
-        file_name = strrchr(token, '/');
-        if (file_name) {
-            *file_name = '\0'; // Temporarily end the string to get directory path
-            parent = create_procfs_dir(token);
-            if (IS_ERR(parent)) {
-                pr_err("dyndev: failed to create procfs directory for %s: %ld\n", token, PTR_ERR(parent));
-                goto error;
-            }
-            *file_name = '/'; // Restore the slash
-            file_name++; // Move to the start of the file name
+        entry = create_procfs_dir(token);
+        // Check if the entry is an error pointer
+        if (IS_ERR(entry)) {
+            printk(KERN_WARNING "dyndev: Failed to create proc file for %s\n", token);
+            proc_files[i] = NULL;
         } else {
-            parent = NULL; // No parent directory
-            file_name = token; // The entire token is the file name
-        }
-
-        proc_name[i] = kstrdup(file_name, GFP_KERNEL);
-        if (!proc_name[i]) {
-            goto error;
-        }
-
-        printk(KERN_INFO "dyndev: creating proc file %s\n", proc_name[i]);
-        proc_files[i] = proc_create(proc_name[i], 0666, parent, &proc_fops);
-        if (!proc_files[i]) {
-            goto error;
+            proc_files[i] =  entry;
         }
         i++;
     }
     return 0;
-    
-error:
-    while (i > 0) {
-        i--;
-        kfree(proc_name[i]);
-        if (proc_files[i]) {
-            remove_proc_entry(proc_name[i], NULL);
-        }
-    }
-    kfree(proc_name);
-    kfree(proc_files);
-    return -ENOMEM;
 }
 
 void free_procs(void) {
