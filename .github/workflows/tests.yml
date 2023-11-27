@@ -1,0 +1,19 @@
+name: Check that the code compiles
+
+on:
+  pull_request:
+    branches:
+      - fd4.10
+      - 4.10_hc
+
+jobs:
+  build:
+    runs-on: panda-arc
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build 
+        run: |
+          bash docker_build.sh
