@@ -4,10 +4,11 @@ on:
   push:
     branches:
       - fd4.10
+      - 4.10_hc
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: panda-arc
 
     steps:
       - name: Checkout code
@@ -16,7 +17,7 @@ jobs:
       - name: Build 
         run: |
           bash docker_build.sh
-          tar -czvf kernels-latest.tar.gz binaries
+          time tar -czvf kernels-latest.tar.gz binaries
 
       - name: Save package
         uses: actions/upload-artifact@v3

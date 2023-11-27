@@ -46,7 +46,7 @@ $NPROC=$(nproc).strip()
 cd $BUILD_ROOT
 
 for arch in TARGETLIST:
-    make mrproper
+    make mrproper -j$NPROC
     TARGETS=["vmlinux"]
     if "arm" in arch:
         TARGETS.append("zImage")
@@ -59,7 +59,7 @@ for arch in TARGETLIST:
     $CROSS_CC=get_cc(arch)
     mkdir -p f"build/{arch}"
     cp f"config.{arch}" f"build/{arch}/.config"
-    make ARCH=@(short_arch) CROSS_COMPILE=$CROSS_CC O=build/@(arch) olddefconfig
+    make ARCH=@(short_arch) CROSS_COMPILE=$CROSS_CC O=build/@(arch) olddefconfig -j$NPROC
 
     echo "Building kernel"
     make ARCH=@(short_arch) CROSS_COMPILE=$CROSS_CC O=build/@(arch) @(TARGETS) -j$NPROC
