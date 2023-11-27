@@ -3,7 +3,8 @@ name: Compile and publish kernels
 on:
   push:
     branches:
-      - ARC-Migration
+      - fd4.10
+      - 4.10_hc
 
 jobs:
   build:
