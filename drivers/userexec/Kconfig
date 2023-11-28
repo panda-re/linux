@@ -1,4 +1,0 @@
-config USEREXEC
-	bool "User exec"
-	help
-		Enable execution of a userspace process after boot

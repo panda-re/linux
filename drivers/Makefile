@@ -7,7 +7,6 @@
 
 obj-$(CONFIG_FIRMADYNE)		+= firmadyne/
 obj-$(CONFIG_DYNDEV)		  += dyndev/
-obj-$(CONFIG_USEREXEC)		  += userexec/
 
 obj-y				+= irqchip/
 obj-y				+= bus/
