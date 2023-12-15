@@ -2,7 +2,7 @@
 #define HYPERCALL_H
 #include "linux/types.h"
 
-static inline void igloo_hypercall(uint32_t num, uint32_t arg1) {
+static inline void igloo_hypercall(uint64_t num, uint64_t arg1) {
 #ifdef CONFIG_MIPS
     register unsigned long a0 asm("a0") = num;
     register unsigned long a1 asm("a1") = arg1;
@@ -31,7 +31,7 @@ static inline void igloo_hypercall(uint32_t num, uint32_t arg1) {
 #endif
 }
 
-static inline unsigned long igloo_hypercall2(uint32_t num, uint32_t arg1, uint32_t arg2) {
+static inline unsigned long igloo_hypercall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
 #if defined(CONFIG_ARM)
     register unsigned long r0 asm("r0") = num;
     register unsigned long r1 asm("r1") = arg1;
