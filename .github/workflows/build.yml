@@ -5,6 +5,7 @@ on:
     branches:
       - fd4.10
       - 4.10_hc
+      - 4.10_updatedconfig
 
 jobs:
   build:
