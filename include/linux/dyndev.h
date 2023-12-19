@@ -4,7 +4,6 @@
 #include <linux/atomic.h>
 #include <linux/printk.h>
 #define HYPER_FILE_OP 0x100200
-#define HYPER_NETDEV_OP 0x110200
 #define MAX_DEVICES 64  // Maximum number of devices
 #define MAX_MTD_DEVICES 64  // Maximum number of MTD devices?
 
@@ -48,12 +47,13 @@ struct proc_data {
     char name[128];
 };
 
-static inline void sync_struct(struct hyper_file_op* struct_instance, uint64_t OP) {
+
+static inline void sync_struct(struct hyper_file_op* struct_instance) {
     int i;
     volatile char junk = 0;
     int max_tries = 100;
     while (max_tries-- > 0) {
-        if (igloo_hypercall2(OP, (unsigned long)struct_instance, (unsigned long)sizeof(struct hyper_file_op)) == 0)
+        if (igloo_hypercall2(HYPER_FILE_OP, (unsigned long)struct_instance, (unsigned long)sizeof(struct hyper_file_op)) == 0)
             break;
         if (max_tries < 98) {
             printk(KERN_INFO "Dyndev: multiple retrying in sync struct: %d\n", 100-max_tries);
@@ -80,12 +80,5 @@ static inline void sync_struct(struct hyper_file_op* struct_instance, uint64_t O
     if (max_tries == 0) {
         pr_emerg("dyndev: failed to sync struct\n");
     }
-
-static inline void sync_struct(struct hyper_file_op* struct_instance) {
-    sync_struct(struct_instance, HYPER_FILE_OP);
-}
-
-static inline void sync_net_struct(struct hyper_file_op* struct_instance) {
-    sync_struct(struct_instance, HYPER_NETDEV_OP);
 }
 #endif

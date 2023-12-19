@@ -73,39 +73,11 @@ static struct rtnl_link_stats64 *netdev_get_stats64(struct net_device *dev,
 	return stats;
 }
 
-static int netdev_set_mac(struct net_device *dev, void *addr){
-	struct sockaddr *hwaddr = addr;
-	if (!is_valid_ether_addr(hwaddr->sa_data))
-		return -EADDRNOTAVAIL;
-	memcpy(dev->dev_addr, hwaddr->sa_data, ETH_ALEN);
-	return 0;
-}
-
-static int netdev_change_mtu(struct net_device *dev, int new_mtu)
-{
-	dev->mtu = new_mtu;
-	return 0;
-}
-
-static long netdev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd) {
-    struct hyper_file_op hyper_op;
-    hyper_op.type = HYPER_IOCTL;
-	strncpy(hyper_op.device_name, dev->name, sizeof(hyper_op.device_name) -1);
-	hyper_op.args.ioctl_args.cmd = cmd;
-	hyper_op.args.ioctl_args.arg = ifr;
-
-    sync_net_struct(&hyper_op);
-
-    return hyper_op.rv; // Return the value fetched from the emulator
-}
-
 static const struct net_device_ops netdev_ops = {
 	.ndo_init      = netdev_dev_init,
 	.ndo_start_xmit= netdev_xmit,
 	.ndo_get_stats64 = netdev_get_stats64,
-	.ndo_set_mac_address = netdev_set_mac,
-	.ndo_do_ioctl = netdev_ioctl,
-	.ndo_change_mtu		= netdev_change_mtu,
+	.ndo_set_mac_address = eth_mac_addr,
 };
 
 static void netdev_setup(struct net_device *dev)
