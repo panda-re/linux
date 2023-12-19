@@ -41,16 +41,6 @@ def get_cc(arch):
 rm -rf $OUT
 mkdir -p $OUT
 
-#BEGIN build the console binaries
-cd $CONSOLE
-
-for arch in TARGETLIST:
-    echo f"Building console for {arch}"
-    make clean
-    $CC=f"{get_cc(arch)}gcc"
-    make
-    mv console f"{$OUT}/console.{arch}"
-#DONE building console binaries
 
 $NPROC=$(nproc).strip()
 
@@ -67,6 +57,7 @@ for arch in TARGETLIST:
     short_arch=m.group(1)
     if short_arch == "mips64":
         short_arch = "mips"
+
 
     $CROSS_CC=get_cc(arch)
     mkdir -p f"build/{arch}"
