@@ -37,8 +37,6 @@ static struct net_device **netdevs = NULL;
 static char *nulltermdevnames = NULL;
 static char **device_names = NULL;
 
-static const struct net_device_ops netdev_ops;
-
 static u32 always_on(struct net_device *dev)
 {
 	return 1;
@@ -114,7 +112,7 @@ int dyndev_init_netdevs(char *devnames) {
 	int i, err;
 
 	if (!devnames || !(*devnames)){
-		printk(KERN_INFO "dyndev: no netdev names provided\n");
+		printk(KERN_ERR "dyndev: no netdev names provided\n");
 		return 0;
 	}
 
@@ -127,7 +125,7 @@ int dyndev_init_netdevs(char *devnames) {
             num_net_devices++;
         }
     }
-	printk(KERN_INFO "dyndev: found %d netdev names\n", num_net_devices);
+	printk(KERN_ERR "dyndev: found %d netdev names\n", num_net_devices);
 
 	nulltermdevnames = kmalloc(strlen(devnames) + 1, GFP_KERNEL);
 
@@ -153,7 +151,7 @@ int dyndev_init_netdevs(char *devnames) {
 		netdevs[i] = alloc_netdev(0, device_names[i], NET_NAME_UNKNOWN, netdev_setup);
 		err = register_netdev(netdevs[i]);
 		if (err){
-			printk(KERN_EMERG "dyndev: Failed to register netdev %s\n", device_names[i]);
+			printk(KERN_ERR "dyndev: Failed to register netdev %s\n", device_names[i]);
 		}
 	}
 	return 0;

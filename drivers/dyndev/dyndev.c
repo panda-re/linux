@@ -63,7 +63,7 @@ static int __init hyperdev_init(void) {
         return rv;
     }
 
-    printk(KERN_INFO "dyndev module loaded.\n");
+    printk(KERN_ERR "dyndev module loaded.\n");
     return 0;
 }
 
@@ -71,7 +71,7 @@ static void __exit hyperdev_exit(void) {
     dyndev_free_devfs();
     dyndev_free_procfs();
     dyndev_free_netdevs();
-    printk(KERN_INFO "dyndev module exited.\n");
+    printk(KERN_ERR "dyndev module exited.\n");
 }
 
 module_init(hyperdev_init);
