@@ -1081,37 +1081,47 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 		return -ENOMEM;
 	}
 
-	char *path = resolve_dfd_to_path(dfd, resolved_path, PATH_MAX);
-	if (IS_ERR(path)) {
-		printk(KERN_ERR "igloo sys_open failed to resolve dfd path: %d\n", dfd);
-	}else {
-		// concatenate 'path' and 'kfilename' carefully here,
-		// ensuring you don't overflow 'resolved_path'. This might involve checking
-		// the lengths and adding a '/' if necessary.
-		// You can use the 'strlcpy' function to help with this.
-		// You should also check for errors from 'strlcpy' and return -EFAULT if there is one.
-
-		if (strlcpy(resolved_path, path, PATH_MAX) >= PATH_MAX) {
+	if (dfd == AT_FDCWD) {
+		// No need to resolve dfd. We just use the filename as is
+		if (strlcpy(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
 			printk(KERN_ERR "igloo sys_open resolved_path too long\n");
 			kfree(kfilename);
 			kfree(resolved_path);
 			return -EFAULT;
 		}
+	} else {
+		// We need to resolve the dfd to a path
+		char *path = resolve_dfd_to_path(dfd, resolved_path, PATH_MAX);
+		if (IS_ERR(path)) {
+			printk(KERN_ERR "igloo sys_open failed to resolve dfd path: %d\n", dfd);
+		}else {
+			// concatenate 'path' and 'kfilename' carefully here,
+			// ensuring you don't overflow 'resolved_path'. This might involve checking
+			// the lengths and adding a '/' if necessary.
+			// You can use the 'strlcpy' function to help with this.
+			// You should also check for errors from 'strlcpy' and return -EFAULT if there is one.
 
-		if (strlcat(resolved_path, "/", PATH_MAX) >= PATH_MAX) {
-			printk(KERN_ERR "igloo sys_open resolved_path too long\n");
-			kfree(kfilename);
-			kfree(resolved_path);
-			return -EFAULT;
+			if (strlcpy(resolved_path, path, PATH_MAX) >= PATH_MAX) {
+				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+				kfree(kfilename);
+				kfree(resolved_path);
+				return -EFAULT;
+			}
+
+			if (strlcat(resolved_path, "/", PATH_MAX) >= PATH_MAX) {
+				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+				kfree(kfilename);
+				kfree(resolved_path);
+				return -EFAULT;
+			}
+
+			if (strlcat(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
+				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+				kfree(kfilename);
+				kfree(resolved_path);
+				return -EFAULT;
+			}
 		}
-
-		if (strlcat(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
-			printk(KERN_ERR "igloo sys_open resolved_path too long\n");
-			kfree(kfilename);
-			kfree(resolved_path);
-			return -EFAULT;
-		}
-
 	}
 	kfree(kfilename);
 
