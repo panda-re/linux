@@ -1113,7 +1113,7 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 		}
 
 	}
-	kfree(kfilename)
+	kfree(kfilename);
 
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {
