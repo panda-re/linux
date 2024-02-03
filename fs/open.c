@@ -31,6 +31,7 @@
 #include <linux/ima.h>
 #include <linux/dnotify.h>
 #include <linux/compat.h>
+#include <linux/hypercall.h>
 
 #include "internal.h"
 
@@ -1035,18 +1036,95 @@ struct file *filp_clone_open(struct file *oldfile)
 }
 EXPORT_SYMBOL(filp_clone_open);
 
+char *resolve_dfd_to_path(int dfd, char *buf, int buflen);
+char *resolve_dfd_to_path(int dfd, char *buf, int buflen) {
+    struct fd f = fdget(dfd);
+    char *path = ERR_PTR(-EBADF);
+
+    if (!f.file)
+        return path;
+
+    path = d_path(&f.file->f_path, buf, buflen);
+    fdput(f);
+
+    return path;
+}
+
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
 	struct open_flags op;
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
+	char *kfilename;
+	char *resolved_path;
 
 	if (fd)
 		return fd;
 
+
 	tmp = getname(filename);
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
+
+	// Copy the filename to kernel space
+	kfilename = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!kfilename)
+        return -ENOMEM;
+    if (copy_from_user(kfilename, filename, PATH_MAX)) {
+        kfree(kfilename);
+        return -EFAULT;
+    }
+
+	resolved_path = kmalloc(PATH_MAX, GFP_KERNEL);
+	if (!resolved_path) {
+		kfree(kfilename);
+		printk(KERN_ERR "igloo sys_open ENOMEM\n");
+		return -ENOMEM;
+	}
+
+	if (dfd == AT_FDCWD) {
+		// No need to resolve dfd. We just use the filename as is
+		if (strlcpy(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
+			printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+			kfree(kfilename);
+			kfree(resolved_path);
+			return -EFAULT;
+		}
+	} else {
+		// We need to resolve the dfd to a path
+		char *path = resolve_dfd_to_path(dfd, resolved_path, PATH_MAX);
+		if (IS_ERR(path)) {
+			printk(KERN_ERR "igloo sys_open failed to resolve dfd path: %d\n", dfd);
+		}else {
+			// concatenate 'path' and 'kfilename' carefully here,
+			// ensuring you don't overflow 'resolved_path'. This might involve checking
+			// the lengths and adding a '/' if necessary.
+			// You can use the 'strlcpy' function to help with this.
+			// You should also check for errors from 'strlcpy' and return -EFAULT if there is one.
+
+			if (strlcpy(resolved_path, path, PATH_MAX) >= PATH_MAX) {
+				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+				kfree(kfilename);
+				kfree(resolved_path);
+				return -EFAULT;
+			}
+
+			if (strlcat(resolved_path, "/", PATH_MAX) >= PATH_MAX) {
+				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+				kfree(kfilename);
+				kfree(resolved_path);
+				return -EFAULT;
+			}
+
+			if (strlcat(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
+				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
+				kfree(kfilename);
+				kfree(resolved_path);
+				return -EFAULT;
+			}
+		}
+	}
+	kfree(kfilename);
 
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {
@@ -1060,6 +1138,16 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 		}
 	}
 	putname(tmp);
+
+ 	// Log path
+	//printk(KERN_ERR "igloo sys_open resolved_path: %s -> %d\n", resolved_path, fd);
+
+	// Create a new string buffer with fd and resolved_path together
+
+	// 100 = open/openat with args: open target, resulting fd
+	igloo_hypercall2(100, (unsigned long)resolved_path, (unsigned long)fd);
+	kfree(resolved_path);
+
 	return fd;
 }
 
