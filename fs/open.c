@@ -31,6 +31,7 @@
 #include <linux/ima.h>
 #include <linux/dnotify.h>
 #include <linux/compat.h>
+#include <linux/hypercall.h>
 
 #include "internal.h"
 
@@ -1139,7 +1140,12 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	putname(tmp);
 
  	// Log path
-	printk(KERN_ERR "igloo sys_open resolved_path: %s -> %d\n", resolved_path, fd);
+	//printk(KERN_ERR "igloo sys_open resolved_path: %s -> %d\n", resolved_path, fd);
+
+	// Create a new string buffer with fd and resolved_path together
+
+	// 100 = open/openat with args: open target, resulting fd
+	igloo_hypercall2(100, (unsigned long)resolved_path, (unsigned long)fd);
 	kfree(resolved_path);
 
 	return fd;
