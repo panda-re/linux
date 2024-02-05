@@ -1041,8 +1041,10 @@ char *resolve_dfd_to_path(int dfd, char *buf, int buflen) {
     struct fd f = fdget(dfd);
     char *path = ERR_PTR(-EBADF);
 
-    if (!f.file)
+    if (!f.file) {
+        fdput(f);
         return path;
+    }
 
     path = d_path(&f.file->f_path, buf, buflen);
     fdput(f);
