@@ -20,6 +20,7 @@
 #include <linux/hypercall.h>
 #include <linux/dyndev.h>
 
+#include "dyndev_hooks.h"
 #include "dyndev_devfs.h"
 #include "dyndev_procfs.h"
 #include "dyndev_netdev.h"
@@ -77,6 +78,12 @@ static int __init hyperdev_init(void) {
         return rv;
     }
 
+    rv = register_all_kprobes();
+    if (rv < 0) {
+        printk(KERN_ERR "dyndev: Failed to register kprobes\n");
+        return rv;
+    }
+
     printk(KERN_ERR "dyndev module loaded.\n");
     return 0;
 }
@@ -86,6 +93,7 @@ static void __exit hyperdev_exit(void) {
     dyndev_free_procfs();
     dyndev_free_netdevs();
     dyndev_free_sysfs();
+    unregister_all_kprobes();
     printk(KERN_ERR "dyndev module exited.\n");
 }
 
