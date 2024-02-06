@@ -15,6 +15,7 @@
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
 #include <linux/falloc.h>
+#include <linux/hypercall.h>
 #include "internal.h"
 
 #include <asm/ioctls.h>
@@ -696,6 +697,37 @@ SYSCALL_DEFINE3(ioctl, unsigned int, fd, unsigned int, cmd, unsigned long, arg)
 	error = security_file_ioctl(f.file, cmd, arg);
 	if (!error)
 		error = do_vfs_ioctl(f.file, fd, cmd, arg);
+
+	if (error == -ENOTTY) {
+		char *path_buffer;
+		char *path;
+		int hrv;
+
+		path_buffer = kmalloc(PATH_MAX, GFP_KERNEL);
+		if (!path_buffer) {
+			fdput(f);
+			return -ENOMEM;
+		}
+
+		path = dentry_path_raw(f.file->f_path.dentry, path_buffer, PATH_MAX);
+		if (IS_ERR(path)) {
+			kfree(path_buffer);
+			fdput(f);
+			return PTR_ERR(path);
+		}
+
+		while (1) {
+			hrv = igloo_hypercall2(105, (unsigned long)path, cmd);
+			if (hrv == 1) {
+				// Ensure path has been paged in by reading it
+				// from the buffer
+				printk(KERN_INFO "retry ioctl hc: path: %s\n", path);
+				continue;
+			}
+			break;
+		}
+		kfree(path);
+	}
 	fdput(f);
 	return error;
 }
