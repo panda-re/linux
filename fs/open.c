@@ -1041,8 +1041,10 @@ char *resolve_dfd_to_path(int dfd, char *buf, int buflen) {
     struct fd f = fdget(dfd);
     char *path = ERR_PTR(-EBADF);
 
-    if (!f.file)
+    if (!f.file) {
+        fdput(f);
         return path;
+    }
 
     path = d_path(&f.file->f_path, buf, buflen);
     fdput(f);
@@ -1055,8 +1057,8 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	struct open_flags op;
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
-	char *kfilename;
 	char *resolved_path;
+	long error;
 
 	if (fd)
 		return fd;
@@ -1066,65 +1068,30 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
 
-	// Copy the filename to kernel space
-	kfilename = kmalloc(PATH_MAX, GFP_KERNEL);
-    if (!kfilename)
-        return -ENOMEM;
-    if (copy_from_user(kfilename, filename, PATH_MAX)) {
-        kfree(kfilename);
-        return -EFAULT;
+    // Allocate memory for resolved_path only when necessary
+    resolved_path = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!resolved_path) {
+        error = -ENOMEM;
+        goto out_putname;
     }
 
-	resolved_path = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!resolved_path) {
-		kfree(kfilename);
-		printk(KERN_ERR "igloo sys_open ENOMEM\n");
-		return -ENOMEM;
-	}
+    // Handle AT_FDCWD or resolve dfd to a path prefix
+    if (dfd == AT_FDCWD) {
+        // Using getname's result directly avoids unnecessary copy_from_user
+        strlcpy(resolved_path, tmp->name, PATH_MAX);
+    } else {
+        // Resolve the dfd to its absolute path
+        char *path = resolve_dfd_to_path(dfd, resolved_path, PATH_MAX);
+        if (IS_ERR(path)) {
+            error = PTR_ERR(path);
+            goto out_free_resolved;
+        }
 
-	if (dfd == AT_FDCWD) {
-		// No need to resolve dfd. We just use the filename as is
-		if (strlcpy(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
-			printk(KERN_ERR "igloo sys_open resolved_path too long\n");
-			kfree(kfilename);
-			kfree(resolved_path);
-			return -EFAULT;
-		}
-	} else {
-		// We need to resolve the dfd to a path
-		char *path = resolve_dfd_to_path(dfd, resolved_path, PATH_MAX);
-		if (IS_ERR(path)) {
-			printk(KERN_ERR "igloo sys_open failed to resolve dfd path: %d\n", dfd);
-		}else {
-			// concatenate 'path' and 'kfilename' carefully here,
-			// ensuring you don't overflow 'resolved_path'. This might involve checking
-			// the lengths and adding a '/' if necessary.
-			// You can use the 'strlcpy' function to help with this.
-			// You should also check for errors from 'strlcpy' and return -EFAULT if there is one.
-
-			if (strlcpy(resolved_path, path, PATH_MAX) >= PATH_MAX) {
-				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
-				kfree(kfilename);
-				kfree(resolved_path);
-				return -EFAULT;
-			}
-
-			if (strlcat(resolved_path, "/", PATH_MAX) >= PATH_MAX) {
-				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
-				kfree(kfilename);
-				kfree(resolved_path);
-				return -EFAULT;
-			}
-
-			if (strlcat(resolved_path, kfilename, PATH_MAX) >= PATH_MAX) {
-				printk(KERN_ERR "igloo sys_open resolved_path too long\n");
-				kfree(kfilename);
-				kfree(resolved_path);
-				return -EFAULT;
-			}
-		}
-	}
-	kfree(kfilename);
+        // Concatenate the resolved path with the provided filename
+        if (resolved_path[0] != '\0' && resolved_path[strlen(resolved_path) - 1] != '/')
+            strlcat(resolved_path, "/", PATH_MAX);
+        strlcat(resolved_path, tmp->name, PATH_MAX);
+    }
 
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {
@@ -1137,18 +1104,20 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 			fd_install(fd, f);
 		}
 	}
-	putname(tmp);
-
- 	// Log path
-	//printk(KERN_ERR "igloo sys_open resolved_path: %s -> %d\n", resolved_path, fd);
-
-	// Create a new string buffer with fd and resolved_path together
 
 	// 100 = open/openat with args: open target, resulting fd
 	igloo_hypercall2(100, (unsigned long)resolved_path, (unsigned long)fd);
-	kfree(resolved_path);
 
-	return fd;
+    kfree(resolved_path);
+    putname(tmp); // Release the name object
+    return fd;
+
+out_free_resolved:
+    kfree(resolved_path);
+
+out_putname:
+    putname(tmp); // Release the name object
+    return error;
 }
 
 SYSCALL_DEFINE3(open, const char __user *, filename, int, flags, umode_t, mode)
